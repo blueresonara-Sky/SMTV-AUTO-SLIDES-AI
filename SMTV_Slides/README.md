@@ -56,13 +56,3 @@ This extension helps place slide clips across a Premiere Pro sequence for these 
 - `client/main.js` - scan folders, choose title/languages, save history, check/install updates, call JSX
 - `host/main.jsx` - import clips, calculate placement timing, avoid blocked V1 ranges, set motion, place clips
 
-## Release Packaging
-
-When creating a release zip, the package must contain the extension root with:
-
-- `CSXS/manifest.xml`
-- `client/`
-- `host/`
-- `README.md`
-
-The updater searches inside the extracted zip until it finds a valid extension root.
