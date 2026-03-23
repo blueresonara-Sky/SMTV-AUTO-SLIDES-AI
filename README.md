@@ -86,25 +86,6 @@ For updates to work correctly, each GitHub Release must include a zip asset that
 
 The updater can search inside the extracted zip until it finds the extension root.
 
-## Version Numbers
-
-This project uses a simple `MAJOR.MINOR.PATCH` version format:
-
-- `PATCH`
-  Use for small fixes or small improvements.
-  Example: `1.0.0` -> `1.0.1`
-- `MINOR`
-  Use for new features that do not break the existing workflow.
-  Example: `1.0.1` -> `1.1.0`
-- `MAJOR`
-  Use for big or breaking changes.
-  Example: `1.1.0` -> `2.0.0`
-
-Simple rule:
-
-- small fix = increase the last number
-- new feature = increase the middle number and reset the last number to `0`
-- breaking change = increase the first number and reset the others to `0`
 
 ## Installation
 
