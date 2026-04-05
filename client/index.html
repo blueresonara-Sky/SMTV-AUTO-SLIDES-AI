@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>SMTV Auto Slides</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>SMTV Auto Slides</h1>
+
+    <div class="field">
+      <label>Selected root folder</label>
+      <div class="row">
+        <input id="folderPath" type="text" readonly placeholder="Choose the root folder that contains your slide files" />
+        <button id="browseBtn">Browse</button>
+      </div>
+      <input id="folderPicker" type="file" webkitdirectory directory multiple hidden />
+    </div>
+
+    <div class="field">
+      <label for="slideCount">How many slides per category</label>
+      <input id="slideCount" type="number" min="1" value="6" />
+    </div>
+
+    <div class="field">
+      <label for="targetTrack">Starting video track</label>
+      <input id="targetTrack" type="number" min="1" value="9" />
+    </div>
+
+    <div class="field">
+      <label class="checkbox">
+        <input id="ignoreV1" type="checkbox" />
+        <span>Avoid placing slides over V1 clips</span>
+      </label>
+    </div>
+
+    <div class="field">
+      <label for="slideAnchor">Slide position</label>
+      <select id="slideAnchor">
+        <option value="top-right">Top Right</option>
+        <option value="top-left">Top Left</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Updates</label>
+      <div class="update-grid">
+        <div class="update-meta">
+          <span>Installed</span>
+          <strong id="installedVersion">-</strong>
+        </div>
+        <div class="update-meta">
+          <span>Latest</span>
+          <strong id="latestVersion">-</strong>
+        </div>
+      </div>
+      <button id="installUpdateBtn" type="button" hidden>Update Now</button>
+      <pre id="updateStatus" class="info">No update check yet.</pre>
+    </div>
+
+    <div class="field">
+      <button id="runBtn" class="primary">Import and Place All Categories</button>
+    </div>
+
+    <div class="field">
+      <label>Chosen titles</label>
+      <pre id="chosenTitle" class="info">—</pre>
+    </div>
+
+    <div class="field">
+      <label>Chosen languages</label>
+      <pre id="chosenLanguages" class="info">—</pre>
+    </div>
+
+    <div class="field">
+      <label>Status</label>
+      <pre id="status">Ready.</pre>
+    </div>
+  </div>
+
+  <script src="lib/CSInterface.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
