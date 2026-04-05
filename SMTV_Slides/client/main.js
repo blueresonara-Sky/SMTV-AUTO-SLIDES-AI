@@ -29,6 +29,7 @@
   var manifestPath = '';
   var trackingDir = path.join(os.homedir(), '.new-peace-maker');
   var trackingFile = path.join(trackingDir, 'usage-history.json');
+  var updateInstallStatusFile = path.join(trackingDir, 'update-install-status.json');
   var categoryOrder = ['NEW PEACE MAKER', 'Be Vegan Keep Peace', 'Forgiveness', 'Save the Earth', 'Veganism'];
   var ignoredFolderNames = { 'AFTERCODECS HAP ALPHA': true };
   var updateRepo = 'blueresonara-Sky/SMTV-AUTO-SLIDES-AI';
@@ -145,6 +146,30 @@
   function saveTracking(data) {
     ensureTrackingFile();
     fs.writeFileSync(trackingFile, JSON.stringify(data, null, 2), 'utf8');
+  }
+
+  function loadUpdateInstallStatus() {
+    ensureTrackingFile();
+    try {
+      if (!fs.existsSync(updateInstallStatusFile)) return null;
+      return JSON.parse(fs.readFileSync(updateInstallStatusFile, 'utf8'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveUpdateInstallStatus(data) {
+    ensureTrackingFile();
+    fs.writeFileSync(updateInstallStatusFile, JSON.stringify(data || {}, null, 2), 'utf8');
+  }
+
+  function clearUpdateInstallStatus() {
+    ensureTrackingFile();
+    try {
+      if (fs.existsSync(updateInstallStatusFile)) {
+        fs.unlinkSync(updateInstallStatusFile);
+      }
+    } catch (e) {}
   }
 
   function persistSettings() {
@@ -422,15 +447,26 @@
       '$SourceDir = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(extractedRoot)),
       '$TargetDir = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(extensionRoot)),
       '$TempRoot = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(tempRoot)),
+      '$StatusFile = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(updateInstallStatusFile)),
       '$Version = ' + quotePowerShellLiteral(latestVersion || ''),
+      '',
+      'function Write-UpdateStatus($State, $Message) {',
+      '  @{',
+      "    state = $State",
+      "    version = $Version",
+      "    message = $Message",
+      "    updatedAt = (Get-Date).ToString('o')",
+      '  } | ConvertTo-Json | Set-Content -LiteralPath $StatusFile -Encoding UTF8',
+      '}',
       '',
       'function Wait-ForPremiereExit {',
       '  $deadline = (Get-Date).AddMinutes(30)',
       '  while ((Get-Date) -lt $deadline) {',
-      "    $running = Get-Process -Name 'Adobe Premiere Pro','CEPHtmlEngine' -ErrorAction SilentlyContinue",
+      "    $running = Get-Process -Name 'Adobe Premiere Pro' -ErrorAction SilentlyContinue",
       '    if (-not $running) { return }',
       '    Start-Sleep -Seconds 2',
       '  }',
+      "  throw 'Premiere Pro did not close in time for the update to finish.'",
       '}',
       '',
       'function Install-UpdateFiles {',
@@ -438,7 +474,7 @@
       '    New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null',
       '  }',
       '',
-      '  for ($i = 0; $i -lt 120; $i++) {',
+      '  for ($i = 0; $i -lt 180; $i++) {',
       '    try {',
       '      Get-ChildItem -LiteralPath $TargetDir -Force -ErrorAction SilentlyContinue | ForEach-Object {',
       '        Remove-Item -LiteralPath $_.FullName -Recurse -Force',
@@ -448,17 +484,20 @@
       '      }',
       '      return',
       '    } catch {',
-      '      Start-Sleep -Seconds 2',
+      '      Start-Sleep -Seconds 1',
       '    }',
       '  }',
       "  throw 'Could not replace the extension files after waiting for Premiere Pro to close.'",
       '}',
       '',
       'try {',
+      "  Write-UpdateStatus 'pending' ('Waiting for Premiere Pro to close before installing version ' + $Version + '.')",
       '  Wait-ForPremiereExit',
       '  Install-UpdateFiles',
+      "  Write-UpdateStatus 'success' ('Version ' + $Version + ' was installed successfully.')",
       '  try { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}',
       '} catch {',
+      "  Write-UpdateStatus 'failed' $_.Exception.Message",
       "  Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue | Out-Null",
       "  [System.Windows.MessageBox]::Show('SMTV Auto Slides update failed: ' + $_.Exception.Message, 'SMTV Auto Slides Updater') | Out-Null",
       '  exit 1',
@@ -594,9 +633,15 @@
 
         if (process.platform === 'win32') {
           setUpdateStatus('Preparing update installer...');
+          saveUpdateInstallStatus({
+            state: 'staged',
+            version: latestVersion,
+            message: 'Update is staged and waiting for Windows approval.',
+            updatedAt: new Date().toISOString()
+          });
           launchWindowsDeferredInstaller(extractedExtensionRoot, tempRoot, latestVersion);
           updateState.installing = false;
-          setUpdateStatus('Update is staged. Accept the Windows prompt, then close Premiere Pro. The installer will finish after Premiere exits and update to version ' + latestVersion + '.');
+          setUpdateStatus('Update is staged. Accept the Windows prompt, then close Premiere Pro and wait a few seconds before reopening. The installer will finish after Premiere exits and update to version ' + latestVersion + '.');
           setUpdateUiState();
           return;
         }
@@ -605,6 +650,7 @@
         installExtractedExtension(extractedExtensionRoot);
         updateState.installedVersion = readManifestVersion(manifestPath) || latestVersion;
         updateState.installing = false;
+        clearUpdateInstallStatus();
         updateState.latestRelease = compareVersions(updateState.latestVersion, updateState.installedVersion) > 0 ? updateState.latestRelease : null;
         setUpdateStatus('Update installed. Please restart Premiere Pro to load version ' + updateState.installedVersion + '.');
         setUpdateUiState();
@@ -1483,7 +1529,19 @@
   restoreSettings();
   updateState.installedVersion = readManifestVersion(manifestPath) || '';
   updateState.latestVersion = loadTracking().settings.lastAvailableVersion || '';
-  setUpdateStatus(updateRepo ? 'Ready to check for updates.' : 'No GitHub update source is configured.');
+  var updateInstallStatus = loadUpdateInstallStatus();
+  if (updateInstallStatus && updateInstallStatus.state === 'success' && compareVersions(updateState.installedVersion, updateInstallStatus.version) >= 0) {
+    clearUpdateInstallStatus();
+    updateInstallStatus = null;
+  }
+
+  if (updateInstallStatus && updateInstallStatus.state === 'failed') {
+    setUpdateStatus('Previous update failed: ' + (updateInstallStatus.message || 'Unknown error') + '.');
+  } else if (updateInstallStatus && (updateInstallStatus.state === 'staged' || updateInstallStatus.state === 'pending')) {
+    setUpdateStatus('A staged update to version ' + (updateInstallStatus.version || '?') + ' is still pending. Close Premiere Pro fully and wait a few seconds before reopening. If Windows asked for permission, accept the prompt.');
+  } else {
+    setUpdateStatus(updateRepo ? 'Ready to check for updates.' : 'No GitHub update source is configured.');
+  }
   setUpdateUiState();
   if (updateRepo) {
     checkForUpdates({ silent: true });
