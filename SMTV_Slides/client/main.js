@@ -238,6 +238,16 @@
     return path.join(os.tmpdir(), 'smtv-slides-updater', String(name || ''));
   }
 
+  function stripWindowsExtendedPathPrefix(filePath) {
+    return process.platform === 'win32'
+      ? String(filePath || '').replace(/^\\\\\?\\/, '')
+      : String(filePath || '');
+  }
+
+  function quotePowerShellLiteral(str) {
+    return "'" + String(str || '').replace(/'/g, "''") + "'";
+  }
+
   function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -403,6 +413,78 @@
     copyDirRecursive(extractedRoot, extensionRoot);
   }
 
+  function launchWindowsDeferredInstaller(extractedRoot, tempRoot, latestVersion) {
+    validateExtractedExtension(extractedRoot);
+
+    var installerScriptPath = path.join(tempRoot, 'install-update.ps1');
+    var scriptLines = [
+      "$ErrorActionPreference = 'Stop'",
+      '$SourceDir = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(extractedRoot)),
+      '$TargetDir = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(extensionRoot)),
+      '$TempRoot = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(tempRoot)),
+      '$Version = ' + quotePowerShellLiteral(latestVersion || ''),
+      '',
+      'function Wait-ForPremiereExit {',
+      '  $deadline = (Get-Date).AddMinutes(30)',
+      '  while ((Get-Date) -lt $deadline) {',
+      "    $running = Get-Process -Name 'Adobe Premiere Pro','CEPHtmlEngine' -ErrorAction SilentlyContinue",
+      '    if (-not $running) { return }',
+      '    Start-Sleep -Seconds 2',
+      '  }',
+      '}',
+      '',
+      'function Install-UpdateFiles {',
+      '  if (-not (Test-Path -LiteralPath $TargetDir)) {',
+      '    New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null',
+      '  }',
+      '',
+      '  for ($i = 0; $i -lt 120; $i++) {',
+      '    try {',
+      '      Get-ChildItem -LiteralPath $TargetDir -Force -ErrorAction SilentlyContinue | ForEach-Object {',
+      '        Remove-Item -LiteralPath $_.FullName -Recurse -Force',
+      '      }',
+      '      Get-ChildItem -LiteralPath $SourceDir -Force | ForEach-Object {',
+      '        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $TargetDir $_.Name) -Recurse -Force',
+      '      }',
+      '      return',
+      '    } catch {',
+      '      Start-Sleep -Seconds 2',
+      '    }',
+      '  }',
+      "  throw 'Could not replace the extension files after waiting for Premiere Pro to close.'",
+      '}',
+      '',
+      'try {',
+      '  Wait-ForPremiereExit',
+      '  Install-UpdateFiles',
+      '  try { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}',
+      '} catch {',
+      "  Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue | Out-Null",
+      "  [System.Windows.MessageBox]::Show('SMTV Auto Slides update failed: ' + $_.Exception.Message, 'SMTV Auto Slides Updater') | Out-Null",
+      '  exit 1',
+      '}'
+    ];
+
+    fs.writeFileSync(installerScriptPath, scriptLines.join('\r\n'), 'utf8');
+
+    var launchCommand = [
+      'Start-Process',
+      '-FilePath', quotePowerShellLiteral('powershell.exe'),
+      '-Verb', 'RunAs',
+      '-WindowStyle', 'Hidden',
+      '-ArgumentList',
+      '@(' +
+        quotePowerShellLiteral('-NoProfile') + ',' +
+        quotePowerShellLiteral('-ExecutionPolicy') + ',' +
+        quotePowerShellLiteral('Bypass') + ',' +
+        quotePowerShellLiteral('-File') + ',' +
+        quotePowerShellLiteral(stripWindowsExtendedPathPrefix(installerScriptPath)) +
+      ')'
+    ].join(' ');
+
+    childProcess.execFileSync('powershell.exe', ['-NoProfile', '-Command', launchCommand]);
+  }
+
   function getReleaseVersion(release) {
     return normalizeVersion((release && (release.tag_name || release.name)) || '');
   }
@@ -508,6 +590,15 @@
         var extractedExtensionRoot = findExtensionRoot(extractPath);
         if (!extractedExtensionRoot) {
           throw new Error('Could not find the extension root in the downloaded zip.');
+        }
+
+        if (process.platform === 'win32') {
+          setUpdateStatus('Preparing update installer...');
+          launchWindowsDeferredInstaller(extractedExtensionRoot, tempRoot, latestVersion);
+          updateState.installing = false;
+          setUpdateStatus('Update is staged. Accept the Windows prompt, then close Premiere Pro. The installer will finish after Premiere exits and update to version ' + latestVersion + '.');
+          setUpdateUiState();
+          return;
         }
 
         setUpdateStatus('Installing update...');
