@@ -229,8 +229,16 @@ function _getPlacementWindow(seq, fallbackEndSeconds) {
 
 var _NPM_LABEL_ENGLISH = 4;
 var _NPM_LABEL_NON_ENGLISH = 8;
-var _NPM_MOTION_POSITION = [1795.0, 336.0];
-var _NPM_MOTION_SCALE = 66.0;
+var _NPM_MOTION_PRESETS = {
+    'top-right': {
+        position: [1795.0, 336.0],
+        scale: 66.0
+    },
+    'top-left': {
+        position: [936.0, 372.0],
+        scale: 66.0
+    }
+};
 
 function _findTrackItemByStartSeconds(track, startSeconds) {
     if (!track || !track.clips) return null;
@@ -305,6 +313,11 @@ function _getSequenceRelativePosition(seq, xy) {
     ];
 }
 
+function _getMotionPreset(anchor) {
+    var key = anchor || 'top-right';
+    return _NPM_MOTION_PRESETS[key] || _NPM_MOTION_PRESETS['top-right'];
+}
+
 function _setMotionPosition(property, xy, seq) {
     if (!property || typeof property.setValue !== 'function' || !xy || xy.length < 2) return;
     var relativeXY = _getSequenceRelativePosition(seq, xy);
@@ -334,45 +347,7 @@ function _setMotionPosition(property, xy, seq) {
     } catch (e2) {}
 }
 
-function _setMotionPositionAtClipStart(property, trackItem, xy, seq) {
-    if (!property || !trackItem || !trackItem.start || !xy || xy.length < 2) return;
-    if (typeof property.setTimeVarying !== 'function' || typeof property.addKey !== 'function' || typeof property.setValueAtKey !== 'function') return;
-    var relativeXY = _getSequenceRelativePosition(seq, xy);
-
-    var keyTime = new Time();
-    keyTime.seconds = trackItem.start.seconds;
-
-    try {
-        property.setTimeVarying(true);
-    } catch (e) {}
-
-    try {
-        var keys = property.getKeys ? property.getKeys() : null;
-        if (keys && keys.length) {
-            for (var i = 0; i < keys.length; i++) {
-                try {
-                    if (property.removeKey) {
-                        property.removeKey(keys[i]);
-                    }
-                } catch (removeErr) {}
-            }
-        }
-    } catch (e2) {}
-
-    try {
-        property.addKey(keyTime);
-    } catch (e3) {}
-
-    try {
-        property.setValueAtKey(keyTime, [relativeXY[0], relativeXY[1]], 1);
-    } catch (e4) {
-        try {
-            property.setValueAtKey(keyTime, [parseFloat(relativeXY[0]), parseFloat(relativeXY[1])], 1);
-        } catch (e5) {}
-    }
-}
-
-function _applySlideMotion(trackItem, categoryName, seq) {
+function _applySlideMotion(trackItem, categoryName, seq, slideAnchor) {
     if (!trackItem || categoryName === 'Be Vegan Keep Peace') return;
 
     var motion = _findComponentByMatchName(trackItem, 'ADBE Motion', 'Motion');
@@ -380,10 +355,10 @@ function _applySlideMotion(trackItem, categoryName, seq) {
 
     var position = _findComponentProperty(motion, 'ADBE Position', 'Position');
     var scale = _findComponentProperty(motion, 'ADBE Scale', 'Scale');
+    var preset = _getMotionPreset(slideAnchor);
 
-    _setMotionPosition(position, _NPM_MOTION_POSITION, seq);
-    _setMotionPositionAtClipStart(position, trackItem, _NPM_MOTION_POSITION, seq);
-    _setComponentPropertyValue(scale, _NPM_MOTION_SCALE);
+    _setMotionPosition(position, preset.position, seq);
+    _setComponentPropertyValue(scale, preset.scale);
 }
 
 function newPeaceMakerImportAndPlaceMulti(payloadJson) {
@@ -392,6 +367,7 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
         var batches = payload.batches || [];
         var targetTrackNumber = parseInt(payload.targetTrack, 10);
         var ignoreV1 = !!payload.ignoreV1;
+        var slideAnchor = payload.slideAnchor || 'top-right';
 
         if (!app.project) {
             return _npmJson({ ok: false, error: 'No open project.' });
@@ -475,7 +451,7 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
             }
             destTrack.overwriteClip(projectItem, when);
             var insertedClip = _findTrackItemByStartSeconds(destTrack, when.seconds);
-            _applySlideMotion(insertedClip, placement.categoryName, seq);
+            _applySlideMotion(insertedClip, placement.categoryName, seq, slideAnchor);
         }
 
         for (var j = 0; j < batches.length; j++) {

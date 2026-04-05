@@ -15,10 +15,9 @@
   var slideCountInput = document.getElementById('slideCount');
   var targetTrackInput = document.getElementById('targetTrack');
   var ignoreV1Input = document.getElementById('ignoreV1');
-  var updateRepoInput = document.getElementById('updateRepo');
+  var slideAnchorInput = document.getElementById('slideAnchor');
   var installedVersionEl = document.getElementById('installedVersion');
   var latestVersionEl = document.getElementById('latestVersion');
-  var checkUpdatesBtn = document.getElementById('checkUpdatesBtn');
   var installUpdateBtn = document.getElementById('installUpdateBtn');
   var updateStatusEl = document.getElementById('updateStatus');
   var statusEl = document.getElementById('status');
@@ -26,12 +25,13 @@
   var chosenLanguagesEl = document.getElementById('chosenLanguages');
 
   var selectedRootFolder = '';
-  var extensionRoot = path.resolve(__dirname, '..');
-  var manifestPath = path.join(extensionRoot, 'CSXS', 'manifest.xml');
+  var extensionRoot = '';
+  var manifestPath = '';
   var trackingDir = path.join(os.homedir(), '.new-peace-maker');
   var trackingFile = path.join(trackingDir, 'usage-history.json');
   var categoryOrder = ['NEW PEACE MAKER', 'Be Vegan Keep Peace', 'Forgiveness', 'Save the Earth', 'Veganism'];
   var ignoredFolderNames = { 'AFTERCODECS HAP ALPHA': true };
+  var updateRepo = 'blueresonara-Sky/SMTV-AUTO-SLIDES-AI';
   var updateState = {
     installedVersion: '',
     latestVersion: '',
@@ -39,7 +39,6 @@
     checking: false,
     installing: false
   };
-  var autoUpdateCheckIntervalMs = 12 * 60 * 60 * 1000;
 
   function defaultTracking() {
     return {
@@ -51,7 +50,7 @@
         slideCount: 6,
         targetTrack: 9,
         ignoreV1: false,
-        updateRepo: '',
+        slideAnchor: 'top-right',
         lastUpdateCheckAt: '',
         lastAvailableVersion: '',
       }
@@ -87,6 +86,37 @@
     }
   }
 
+  function resolveExtensionRoot() {
+    try {
+      if (cs && typeof cs.getSystemPath === 'function' && typeof SystemPath !== 'undefined' && typeof SystemPath.EXTENSION !== 'undefined') {
+        var cepExtensionPath = cs.getSystemPath(SystemPath.EXTENSION);
+        if (cepExtensionPath && fs.existsSync(cepExtensionPath)) {
+          return cepExtensionPath;
+        }
+      }
+    } catch (e) {}
+
+    try {
+      if (typeof window !== 'undefined' && window.location && window.location.pathname) {
+        var pathname = decodeURIComponent(window.location.pathname).replace(/^\/([A-Za-z]:\/)/, '$1');
+        var htmlPath = pathname.replace(/\//g, path.sep);
+        var fromLocation = path.resolve(path.dirname(htmlPath), '..');
+        if (fromLocation && fs.existsSync(fromLocation)) {
+          return fromLocation;
+        }
+      }
+    } catch (e1) {}
+
+    try {
+      var fallbackPath = path.resolve(__dirname, '..');
+      if (fallbackPath && fs.existsSync(fallbackPath)) {
+        return fallbackPath;
+      }
+    } catch (e2) {}
+
+    return '';
+  }
+
   function loadTracking() {
     ensureTrackingFile();
     try {
@@ -103,7 +133,7 @@
       if (typeof parsed.settings.targetTrack === 'undefined') parsed.settings.targetTrack = base.settings.targetTrack;
       if (typeof parsed.settings.rootFolder === 'undefined') parsed.settings.rootFolder = base.settings.rootFolder;
       if (typeof parsed.settings.ignoreV1 === 'undefined') parsed.settings.ignoreV1 = base.settings.ignoreV1;
-      if (typeof parsed.settings.updateRepo === 'undefined') parsed.settings.updateRepo = base.settings.updateRepo;
+      if (typeof parsed.settings.slideAnchor === 'undefined') parsed.settings.slideAnchor = base.settings.slideAnchor;
       if (typeof parsed.settings.lastUpdateCheckAt === 'undefined') parsed.settings.lastUpdateCheckAt = base.settings.lastUpdateCheckAt;
       if (typeof parsed.settings.lastAvailableVersion === 'undefined') parsed.settings.lastAvailableVersion = base.settings.lastAvailableVersion;
       return parsed;
@@ -123,7 +153,7 @@
     tracking.settings.slideCount = parseInt(slideCountInput.value, 10) || 6;
     tracking.settings.targetTrack = parseInt(targetTrackInput.value, 10) || 9;
     tracking.settings.ignoreV1 = !!(ignoreV1Input && ignoreV1Input.checked);
-    tracking.settings.updateRepo = updateRepoInput ? String(updateRepoInput.value || '').trim() : '';
+    tracking.settings.slideAnchor = slideAnchorInput ? String(slideAnchorInput.value || 'top-right') : 'top-right';
     saveTracking(tracking);
   }
 
@@ -136,7 +166,7 @@
     slideCountInput.value = tracking.settings.slideCount || 6;
     targetTrackInput.value = tracking.settings.targetTrack || 9;
     ignoreV1Input.checked = !!tracking.settings.ignoreV1;
-    updateRepoInput.value = tracking.settings.updateRepo || '';
+    slideAnchorInput.value = tracking.settings.slideAnchor || 'top-right';
   }
 
   function setUpdateStatus(msg) {
@@ -144,11 +174,14 @@
   }
 
   function setUpdateUiState() {
+    var hasUpdate = !!updateState.latestRelease && compareVersions(updateState.latestVersion, updateState.installedVersion) > 0;
     installedVersionEl.textContent = updateState.installedVersion || '-';
     latestVersionEl.textContent = updateState.latestVersion || '-';
-    checkUpdatesBtn.disabled = updateState.checking || updateState.installing;
     installUpdateBtn.disabled = updateState.checking || updateState.installing || !updateState.latestRelease;
-    installUpdateBtn.hidden = !updateState.latestRelease || compareVersions(updateState.latestVersion, updateState.installedVersion) <= 0;
+    installUpdateBtn.hidden = !hasUpdate;
+    if (installUpdateBtn.classList) {
+      installUpdateBtn.classList.toggle('update-available', hasUpdate);
+    }
   }
 
   function readManifestVersion(filePath) {
@@ -194,18 +227,7 @@
     var tracking = loadTracking();
     tracking.settings.lastUpdateCheckAt = new Date().toISOString();
     tracking.settings.lastAvailableVersion = latestVersion || '';
-    tracking.settings.updateRepo = String(updateRepoInput.value || '').trim();
     saveTracking(tracking);
-  }
-
-  function shouldBackgroundCheck() {
-    var tracking = loadTracking();
-    var repo = String(updateRepoInput.value || '').trim();
-    if (!repo) return false;
-    if (!tracking.settings.lastUpdateCheckAt) return true;
-    var lastCheckTime = Date.parse(tracking.settings.lastUpdateCheckAt);
-    if (!lastCheckTime) return true;
-    return (Date.now() - lastCheckTime) >= autoUpdateCheckIntervalMs;
   }
 
   function getGitHubReleaseApiUrl(repo) {
@@ -398,11 +420,10 @@
 
   function checkForUpdates(options) {
     var opts = options || {};
-    var repo = String(updateRepoInput.value || '').trim();
-    if (!repo) {
+    if (!updateRepo) {
       updateState.latestRelease = null;
       updateState.latestVersion = '';
-      setUpdateStatus('Enter a GitHub repo like owner/repo to enable update checks.');
+      setUpdateStatus('No GitHub update source is configured.');
       setUpdateUiState();
       return;
     }
@@ -411,7 +432,7 @@
     setUpdateStatus(opts.silent ? 'Checking for updates in background...' : 'Checking for updates...');
     setUpdateUiState();
 
-    requestJson(getGitHubReleaseApiUrl(repo), function (err, release) {
+    requestJson(getGitHubReleaseApiUrl(updateRepo), function (err, release) {
       updateState.checking = false;
       if (err) {
         updateState.latestRelease = null;
@@ -439,9 +460,8 @@
   }
 
   function installLatestUpdate() {
-    var repo = String(updateRepoInput.value || '').trim();
-    if (!repo) {
-      setUpdateStatus('Enter a GitHub repo before installing updates.');
+    if (!updateRepo) {
+      setUpdateStatus('No GitHub update source is configured.');
       return;
     }
 
@@ -449,11 +469,11 @@
     var latestVersion = updateState.latestVersion;
     var zipAsset = getReleaseZipAsset(release);
     if (!release || !zipAsset) {
-      setUpdateStatus('No downloadable update is ready yet. Run Check for Updates first.');
+      setUpdateStatus('No downloadable update is ready yet. Restart the extension or wait for the startup check to finish.');
       return;
     }
 
-    if (!window.confirm('Install version ' + latestVersion + ' from ' + repo + ' now? Premiere Pro should be restarted after the update.')) {
+    if (!window.confirm('Install version ' + latestVersion + ' from ' + updateRepo + ' now? Premiere Pro should be restarted after the update.')) {
       return;
     }
 
@@ -521,18 +541,30 @@
     return String(str || '').toLowerCase().replace(/\.mov$/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
+  function formatDisplayTitle(str) {
+    return String(str || '')
+      .replace(/[_\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   var canonicalLanguageAliasMap = {
     English: ['english', 'eng'],
     Arabic: ['arabic', 'ara'],
-    Aulac: ['aulac', 'au', 'aul'],
+    Aulacese: ['aulacese', 'aulac', 'au', 'aul', 'vietnamese', 'viet', 'vie'],
     Bulgarian: ['bulgarian', 'bul'],
     Chinese: ['chinese', 'chi', 'zho', 'zh'],
+    'Chinese Simplified': ['chinese simplified', 'chi simp', 'chisimp', 'simplified chinese'],
+    'Chinese Traditional': ['chinese traditional', 'chi trad', 'chitrad', 'traditional chinese'],
     Croatian: ['croatian', 'cro', 'hrv'],
     Czech: ['czech', 'cze', 'ces'],
+    Dutch: ['dutch', 'nederlands', 'ned', 'nld'],
     Estonian: ['estonian', 'est'],
     Ewe: ['ewe'],
+    Finnish: ['finnish', 'fin'],
     French: ['french', 'fre', 'fra'],
     German: ['german', 'ger', 'deu'],
+    Greek: ['greek', 'gre', 'ell'],
     Hebrew: ['hebrew', 'heb'],
     Hindi: ['hindi', 'hin'],
     Hungarian: ['hungarian', 'hun'],
@@ -540,8 +572,9 @@
     Italian: ['italian', 'ita'],
     Japanese: ['japanese', 'jap', 'jpn'],
     Korean: ['korean', 'kor'],
-    Malayalam: ['malayalam', 'mal'],
+    Malay: ['malay', 'malaysian', 'mal'],
     Mongolian: ['mongolian', 'mon'],
+    Norwegian: ['norwegian', 'norway', 'nor'],
     Persian: ['persian', 'per', 'fas'],
     Polish: ['polish', 'pol'],
     Portuguese: ['portuguese', 'por'],
@@ -549,15 +582,39 @@
     Romanian: ['romanian', 'rom', 'ron'],
     Russian: ['russian', 'rus'],
     Serbian: ['serbian', 'srp', 'scc'],
+    Slovenian: ['slovenian', 'slv'],
     Spanish: ['spanish', 'spa'],
     Swedish: ['swedish', 'swe'],
+    Telugu: ['telugu', 'telegu', 'tel'],
     Thai: ['thai', 'tha'],
+    Turkish: ['turkish', 'tur'],
+    Ukrainian: ['ukrainian', 'ukr'],
     Urdu: ['urdu', 'urd'],
     Zulu: ['zulu', 'zul']
   };
+  var canonicalLanguageAliasLookup = null;
 
   function titleCaseWords(str) {
     return String(str || '').replace(/\b[a-z]/g, function (ch) { return ch.toUpperCase(); });
+  }
+
+  function getCanonicalLanguageAliasLookup() {
+    if (canonicalLanguageAliasLookup) return canonicalLanguageAliasLookup;
+
+    canonicalLanguageAliasLookup = {};
+    for (var canonicalName in canonicalLanguageAliasMap) {
+      if (!canonicalLanguageAliasMap.hasOwnProperty(canonicalName)) continue;
+      var aliases = canonicalLanguageAliasMap[canonicalName].slice();
+      aliases.push(normalizeToken(canonicalName));
+      for (var i = 0; i < aliases.length; i++) {
+        var alias = normalizeToken(aliases[i]);
+        if (!alias) continue;
+        canonicalLanguageAliasLookup[alias] = canonicalName;
+        canonicalLanguageAliasLookup[alias.replace(/\s+/g, '')] = canonicalName;
+      }
+    }
+
+    return canonicalLanguageAliasLookup;
   }
 
   function canonicalizeLanguageName(languageName) {
@@ -565,15 +622,24 @@
     var compactNorm = langNorm.replace(/\s+/g, '');
     if (!langNorm) return null;
 
-    for (var canonicalName in canonicalLanguageAliasMap) {
-      if (!canonicalLanguageAliasMap.hasOwnProperty(canonicalName)) continue;
-      var aliases = canonicalLanguageAliasMap[canonicalName];
-      for (var i = 0; i < aliases.length; i++) {
-        var alias = aliases[i];
-        if (langNorm === alias || compactNorm === alias.replace(/\s+/g, '')) {
-          return canonicalName;
+    var aliasLookup = getCanonicalLanguageAliasLookup();
+    if (aliasLookup[langNorm]) return aliasLookup[langNorm];
+    if (aliasLookup[compactNorm]) return aliasLookup[compactNorm];
+
+    var partialMatches = [];
+    for (var alias in aliasLookup) {
+      if (!aliasLookup.hasOwnProperty(alias) || !alias) continue;
+      if (compactNorm === alias) {
+        return aliasLookup[alias];
+      }
+      if (compactNorm.indexOf(alias) !== -1 || alias.indexOf(compactNorm) !== -1) {
+        if (partialMatches.indexOf(aliasLookup[alias]) === -1) {
+          partialMatches.push(aliasLookup[alias]);
         }
       }
+    }
+    if (partialMatches.length === 1) {
+      return partialMatches[0];
     }
 
     return titleCaseWords(langNorm);
@@ -600,6 +666,43 @@
     if (greenTokens === 'be go green veg') return 'be veg go green';
 
     return stripped || key;
+  }
+
+  function getCanonicalGroupingTitleKey(title, categoryName) {
+    if (categoryName === 'Be Vegan Keep Peace') {
+      return 'be vegan keep peace';
+    }
+
+    var key = normalizeTitleKey(title);
+    if (!key) return '';
+
+    key = key.replace(/\b(the|a|an)\b/g, ' ');
+    key = key.replace(/\s+/g, ' ').trim();
+
+    if (categoryName === 'Save the Earth') {
+      return getCanonicalSaveTheEarthTitleKey(key);
+    }
+
+    return key;
+  }
+
+  function choosePreferredDisplayTitle(existingTitle, candidateTitle) {
+    var existing = formatDisplayTitle(existingTitle);
+    var candidate = formatDisplayTitle(candidateTitle);
+    if (!existing) return candidate;
+    if (!candidate) return existing;
+
+    var existingNorm = normalizeTitleKey(existing);
+    var candidateNorm = normalizeTitleKey(candidate);
+    var existingHasLeadingArticle = /^(the|a|an)\b/.test(existingNorm);
+    var candidateHasLeadingArticle = /^(the|a|an)\b/.test(candidateNorm);
+
+    if (existingHasLeadingArticle !== candidateHasLeadingArticle) {
+      return candidateHasLeadingArticle ? existing : candidate;
+    }
+
+    if (candidate.length < existing.length) return candidate;
+    return existing;
   }
 
   function getSaveTheEarthFamilyKey(title, titlesMap) {
@@ -662,27 +765,166 @@
     return canonicalizeLanguageName(langCode);
   }
 
+  function createEmptyScanResult(categoryName) {
+    return {
+      categoryName: categoryName,
+      isFlatSingleTitle: categoryName === 'Be Vegan Keep Peace',
+      languageDirs: [],
+      titlesMap: {},
+      titleDisplayMap: {}
+    };
+  }
+
+  function addEntryToScanResult(scanResult, title, languageName, filePath, categoryName) {
+    var canonicalLanguage = canonicalizeLanguageName(languageName);
+    var titleKey = getCanonicalGroupingTitleKey(title, categoryName);
+    if (!titleKey || !canonicalLanguage || !filePath) return;
+
+    if (!scanResult.titlesMap[titleKey]) scanResult.titlesMap[titleKey] = {};
+    if (!scanResult.titlesMap[titleKey][canonicalLanguage]) {
+      scanResult.titlesMap[titleKey][canonicalLanguage] = filePath;
+    }
+
+    scanResult.titleDisplayMap[titleKey] = choosePreferredDisplayTitle(scanResult.titleDisplayMap[titleKey], title);
+
+    if (scanResult.languageDirs.indexOf(canonicalLanguage) === -1) {
+      scanResult.languageDirs.push(canonicalLanguage);
+    }
+  }
+
+  function mergeScanResults(baseScanResult, additionScanResult) {
+    var merged = baseScanResult || { categoryName: '', isFlatSingleTitle: false, languageDirs: [], titlesMap: {}, titleDisplayMap: {} };
+    if (!additionScanResult) return merged;
+
+    if (additionScanResult.isFlatSingleTitle) {
+      merged.isFlatSingleTitle = true;
+    }
+
+    additionScanResult.languageDirs.forEach(function (lang) {
+      if (merged.languageDirs.indexOf(lang) === -1) {
+        merged.languageDirs.push(lang);
+      }
+    });
+
+    Object.keys(additionScanResult.titlesMap || {}).forEach(function (title) {
+      var languageMap = additionScanResult.titlesMap[title] || {};
+      Object.keys(languageMap).forEach(function (lang) {
+        addEntryToScanResult(
+          merged,
+          (additionScanResult.titleDisplayMap && additionScanResult.titleDisplayMap[title]) || title,
+          lang,
+          languageMap[lang],
+          merged.categoryName || additionScanResult.categoryName || ''
+        );
+      });
+    });
+
+    return merged;
+  }
+
+  function parseFlexibleCategoryFile(filePath) {
+    var ext = path.extname(filePath).toLowerCase();
+    if (ext !== '.mov') return null;
+
+    var base = path.basename(filePath, ext).trim();
+    if (!base) return null;
+
+    var match = base.match(/^Be Vegan[_\s]+Keep Peace_(.+)$/i);
+    if (match) {
+      return {
+        categoryName: 'Be Vegan Keep Peace',
+        title: 'Be Vegan Keep Peace',
+        language: match[1].trim()
+      };
+    }
+
+    match = base.match(/^slides\s+peace\s+2019\s+(.+?)_(.+)$/i);
+    if (match) {
+      return {
+        categoryName: 'NEW PEACE MAKER',
+        title: match[2].trim(),
+        language: match[1].trim()
+      };
+    }
+
+    match = base.match(/^slides\s+forgiveness\s+(.+?)_(.+)$/i);
+    if (match) {
+      return {
+        categoryName: 'Forgiveness',
+        title: match[2].trim(),
+        language: match[1].trim()
+      };
+    }
+
+    match = base.match(/^slides\s+save(?:the|our)e?arth\s+(.+?)_(.+)$/i);
+    if (match) {
+      return {
+        categoryName: 'Save the Earth',
+        title: match[2].trim(),
+        language: match[1].trim()
+      };
+    }
+
+    match = base.match(/^slides\s+veg\s+(.+?)_(.+)$/i);
+    if (match) {
+      return {
+        categoryName: 'Veganism',
+        title: match[2].trim(),
+        language: match[1].trim()
+      };
+    }
+
+    return null;
+  }
+
+  function scanFlexibleCategories(rootFolder) {
+    var scanByCategory = {};
+    var pendingDirs = [rootFolder];
+
+    while (pendingDirs.length) {
+      var currentDir = pendingDirs.pop();
+      var dirents = fs.readdirSync(currentDir, { withFileTypes: true });
+
+      dirents.forEach(function (dirent) {
+        var fullPath = path.join(currentDir, dirent.name);
+        if (dirent.isDirectory()) {
+          if (!ignoredFolderNames[dirent.name]) {
+            pendingDirs.push(fullPath);
+          }
+          return;
+        }
+
+        if (!dirent.isFile() || path.extname(dirent.name).toLowerCase() !== '.mov') return;
+
+        var parsed = parseFlexibleCategoryFile(fullPath);
+        if (!parsed || categoryOrder.indexOf(parsed.categoryName) === -1) return;
+
+        if (!scanByCategory[parsed.categoryName]) {
+          scanByCategory[parsed.categoryName] = createEmptyScanResult(parsed.categoryName);
+        }
+
+        addEntryToScanResult(scanByCategory[parsed.categoryName], parsed.title, parsed.language, fullPath, parsed.categoryName);
+      });
+    }
+
+    return scanByCategory;
+  }
+
   function scanSingleCategory(categoryName, categoryRoot) {
+    var scanResult = createEmptyScanResult(categoryName);
+
     if (categoryName === 'Be Vegan Keep Peace') {
       var flatFiles = fs.readdirSync(categoryRoot, { withFileTypes: true })
         .filter(function (d) { return d.isFile() && path.extname(d.name).toLowerCase() === '.mov'; })
         .map(function (d) { return path.join(categoryRoot, d.name); });
 
-      var flatTitle = 'Be Vegan Keep Peace';
-      var flatTitlesMap = {};
-      flatTitlesMap[flatTitle] = {};
-
       flatFiles.forEach(function (fullPath) {
         var lang = parseFlatBeVeganLanguage(fullPath);
         if (!lang) return;
-        flatTitlesMap[flatTitle][lang] = fullPath;
+        addEntryToScanResult(scanResult, 'Be Vegan Keep Peace', lang, fullPath, categoryName);
       });
 
-      return {
-        isFlatSingleTitle: true,
-        languageDirs: Object.keys(flatTitlesMap[flatTitle]),
-        titlesMap: flatTitlesMap
-      };
+      return scanResult;
     }
 
     var dirents = fs.readdirSync(categoryRoot, { withFileTypes: true });
@@ -695,8 +937,6 @@
         };
       });
 
-    var titlesMap = {};
-
     languageDirs.forEach(function (langInfo) {
       var langDir = path.join(categoryRoot, langInfo.name);
       var files = fs.readdirSync(langDir, { withFileTypes: true })
@@ -706,31 +946,48 @@
       files.forEach(function (fullPath) {
         var title = parseTitleFromFile(fullPath, langInfo.name);
         if (!title) return;
-        if (!titlesMap[title]) titlesMap[title] = {};
-        titlesMap[title][langInfo.canonicalName] = fullPath;
+        addEntryToScanResult(scanResult, title, langInfo.canonicalName, fullPath, categoryName);
       });
     });
-
-    return {
-      isFlatSingleTitle: false,
-      languageDirs: languageDirs.map(function (langInfo) { return langInfo.canonicalName; }),
-      titlesMap: titlesMap
-    };
+    return scanResult;
   }
 
   function scanAllCategories(rootFolder) {
-    var found = [];
+    var foundByCategory = {};
+
     categoryOrder.forEach(function (categoryName) {
       var categoryPath = path.join(rootFolder, categoryName);
       if (fs.existsSync(categoryPath) && fs.statSync(categoryPath).isDirectory()) {
-        found.push({
+        foundByCategory[categoryName] = {
           name: categoryName,
           path: categoryPath,
           scanResult: scanSingleCategory(categoryName, categoryPath)
-        });
+        };
       }
     });
-    return found;
+
+    var flexibleScanByCategory = scanFlexibleCategories(rootFolder);
+    Object.keys(flexibleScanByCategory).forEach(function (categoryName) {
+      if (!foundByCategory[categoryName]) {
+        foundByCategory[categoryName] = {
+          name: categoryName,
+          path: rootFolder,
+          scanResult: createEmptyScanResult(categoryName)
+        };
+      }
+
+      foundByCategory[categoryName].scanResult = mergeScanResults(
+        foundByCategory[categoryName].scanResult,
+        flexibleScanByCategory[categoryName]
+      );
+    });
+
+    return categoryOrder
+      .filter(function (categoryName) { return !!foundByCategory[categoryName]; })
+      .map(function (categoryName) { return foundByCategory[categoryName]; })
+      .filter(function (categoryData) {
+        return Object.keys(categoryData.scanResult.titlesMap || {}).length > 0;
+      });
   }
 
   function chooseBatchForCategory(categoryName, scanResult, requestedCount, tracking) {
@@ -738,6 +995,9 @@
     tracking.categories[categoryName] = tracking.categories[categoryName] || { usedEnglishTitlesCycle: [], isFlatSingleTitle: !!scanResult.isFlatSingleTitle };
     tracking.usedLanguagesGlobalCycle = Array.isArray(tracking.usedLanguagesGlobalCycle)
       ? tracking.usedLanguagesGlobalCycle
+      : [];
+    tracking._currentRunUsedLanguages = Array.isArray(tracking._currentRunUsedLanguages)
+      ? tracking._currentRunUsedLanguages
       : [];
 
     var categoryTracking = tracking.categories[categoryName];
@@ -807,12 +1067,19 @@
       });
     }
 
+    function getUnusedThisRunLanguagesForTitle(title) {
+      return getOtherLanguagesForTitle(title).filter(function (lang) {
+        return tracking._currentRunUsedLanguages.indexOf(lang) === -1;
+      });
+    }
+
     function getSaveTheEarthReuseMap(title, selectedLanguages) {
       var reuseMap = {};
       if (categoryName !== 'Save the Earth') return reuseMap;
 
       var selectedLookup = {};
       selectedLanguages.forEach(function (lang) { selectedLookup[lang] = true; });
+      tracking._currentRunUsedLanguages.forEach(function (lang) { selectedLookup[lang] = true; });
 
       tracking.usedLanguagesGlobalCycle.forEach(function (lang) {
         if (lang === 'English' || selectedLookup[lang]) return;
@@ -831,29 +1098,53 @@
     }
 
     var candidatePool = shuffle(unusedEnglishTitles).sort(function (a, b) {
+      var bUnusedThisRun = getUnusedThisRunLanguagesForTitle(b).length;
+      var aUnusedThisRun = getUnusedThisRunLanguagesForTitle(a).length;
+      if (bUnusedThisRun !== aUnusedThisRun) return bUnusedThisRun - aUnusedThisRun;
+
       var bUnused = getUnusedLanguagesForTitle(b).length;
       var aUnused = getUnusedLanguagesForTitle(a).length;
       if (bUnused !== aUnused) return bUnused - aUnused;
+
       return getOtherLanguagesForTitle(b).length - getOtherLanguagesForTitle(a).length;
     });
 
     var chosenTitle = candidatePool[0];
+    var chosenTitleDisplay = (scanResult.titleDisplayMap && scanResult.titleDisplayMap[chosenTitle]) || chosenTitle;
     var languageToFile = getLanguageToFileForTitle(chosenTitle);
     var otherLanguages = Object.keys(languageToFile).filter(function (lang) { return lang !== 'English'; });
     var pickedOtherLanguages = shuffle(otherLanguages.filter(function (lang) {
-      return tracking.usedLanguagesGlobalCycle.indexOf(lang) === -1;
+      return tracking._currentRunUsedLanguages.indexOf(lang) === -1 &&
+        tracking.usedLanguagesGlobalCycle.indexOf(lang) === -1;
     })).slice(0, otherNeeded);
     var warningMessages = [];
     var reusedFreshness = false;
+    var reusedThisRun = false;
 
     if (pickedOtherLanguages.length < otherNeeded && otherLanguages.length > pickedOtherLanguages.length) {
       var alreadyPicked = {};
       for (var i = 0; i < pickedOtherLanguages.length; i++) {
         alreadyPicked[pickedOtherLanguages[i]] = true;
       }
-      var refillPool = otherLanguages.filter(function (lang) { return !alreadyPicked[lang]; });
-      pickedOtherLanguages = pickedOtherLanguages.concat(shuffle(refillPool).slice(0, otherNeeded - pickedOtherLanguages.length));
-      reusedFreshness = true;
+
+      var refillPool = otherLanguages.filter(function (lang) {
+        return !alreadyPicked[lang] && tracking._currentRunUsedLanguages.indexOf(lang) === -1;
+      });
+      var globallyUsedRefillPool = refillPool.filter(function (lang) {
+        return tracking.usedLanguagesGlobalCycle.indexOf(lang) !== -1;
+      });
+      pickedOtherLanguages = pickedOtherLanguages.concat(shuffle(globallyUsedRefillPool).slice(0, otherNeeded - pickedOtherLanguages.length));
+      if (globallyUsedRefillPool.length) reusedFreshness = true;
+    }
+
+    if (pickedOtherLanguages.length < otherNeeded && otherLanguages.length > pickedOtherLanguages.length) {
+      var alreadyPickedAgain = {};
+      for (var j = 0; j < pickedOtherLanguages.length; j++) {
+        alreadyPickedAgain[pickedOtherLanguages[j]] = true;
+      }
+      var finalRefillPool = otherLanguages.filter(function (lang) { return !alreadyPickedAgain[lang]; });
+      pickedOtherLanguages = pickedOtherLanguages.concat(shuffle(finalRefillPool).slice(0, otherNeeded - pickedOtherLanguages.length));
+      if (finalRefillPool.length) reusedThisRun = true;
     }
 
     if (categoryName === 'Save the Earth' && pickedOtherLanguages.length < otherNeeded) {
@@ -868,7 +1159,11 @@
     }
 
     if (reusedFreshness) {
-      warningMessages.push(categoryName + ': not enough globally fresh non-English languages were available for the chosen title, so some languages were reused.');
+      warningMessages.push(categoryName + ': not enough globally fresh non-English languages were available for the chosen title, so languages from earlier runs were reused.');
+    }
+
+    if (reusedThisRun) {
+      warningMessages.push(categoryName + ': not enough unused non-English languages were available for the chosen title, so some languages already used earlier in this import had to be reused.');
     }
 
     if (categoryName === 'Save the Earth' && pickedOtherLanguages.length > otherNeeded) {
@@ -884,6 +1179,9 @@
     }
 
     pickedOtherLanguages.forEach(function (lang) {
+      if (tracking._currentRunUsedLanguages.indexOf(lang) === -1) {
+        tracking._currentRunUsedLanguages.push(lang);
+      }
       if (tracking.usedLanguagesGlobalCycle.indexOf(lang) === -1) {
         tracking.usedLanguagesGlobalCycle.push(lang);
       }
@@ -900,6 +1198,7 @@
 
     return {
       chosenTitle: chosenTitle,
+      chosenTitleDisplay: chosenTitleDisplay,
       selectedLanguages: selectedLanguages,
       selectedFiles: selectedFiles,
       warning: warningMessages.join(' '),
@@ -945,7 +1244,7 @@
   browseBtn.addEventListener('click', function () {
     try {
       if (window.cep && window.cep.fs && typeof window.cep.fs.showOpenDialogEx === 'function') {
-        var result = window.cep.fs.showOpenDialogEx(false, true, 'Select the root folder that contains all 5 category folders');
+        var result = window.cep.fs.showOpenDialogEx(false, true, 'Select the root folder that contains your slide files');
         if (result && result.data && result.data.length) {
           setSelectedRootFolder(result.data[0]);
           return;
@@ -978,16 +1277,7 @@
   slideCountInput.addEventListener('change', persistSettings);
   targetTrackInput.addEventListener('change', persistSettings);
   ignoreV1Input.addEventListener('change', persistSettings);
-  updateRepoInput.addEventListener('change', function () {
-    persistSettings();
-    updateState.latestRelease = null;
-    updateState.latestVersion = '';
-    setUpdateStatus(updateRepoInput.value.trim() ? 'Update repo saved. Click Check for Updates.' : 'Enter a GitHub repo like owner/repo to enable update checks.');
-    setUpdateUiState();
-  });
-  checkUpdatesBtn.addEventListener('click', function () {
-    checkForUpdates({ silent: false });
-  });
+  slideAnchorInput.addEventListener('change', persistSettings);
   installUpdateBtn.addEventListener('click', installLatestUpdate);
   window.addEventListener('beforeunload', persistSettings);
 
@@ -995,13 +1285,14 @@
     try {
       setStatus('Working...');
       if (!selectedRootFolder) {
-        setStatus('Please choose the root folder that contains the 5 category folders first.');
+        setStatus('Please choose the root folder that contains your slide files first.');
         return;
       }
 
       var requestedCount = parseInt(slideCountInput.value, 10);
       var targetTrack = parseInt(targetTrackInput.value, 10);
       var ignoreV1 = !!ignoreV1Input.checked;
+      var slideAnchor = String(slideAnchorInput.value || 'top-right');
 
       if (!requestedCount || requestedCount < 1) {
         setStatus('Please enter a valid number of slides.');
@@ -1014,9 +1305,10 @@
 
       persistSettings();
       var tracking = loadTracking();
+      tracking._currentRunUsedLanguages = [];
       var categoryDataList = scanAllCategories(selectedRootFolder);
       if (!categoryDataList.length) {
-        setStatus('No category folders were found under the selected root folder.');
+        setStatus('No usable slide files were found under the selected root folder.');
         return;
       }
 
@@ -1046,16 +1338,17 @@
               isEnglish: lang === 'English'
             };
           }),
-          title: batch.chosenTitle,
+          title: batch.chosenTitleDisplay,
           targetTrack: targetTrack,
           warning: batch.warning || ''
         });
-        titleSummary.push(categoryData.name + ': ' + batch.chosenTitle);
+        titleSummary.push(categoryData.name + ': ' + batch.chosenTitleDisplay);
         languageSummary.push(categoryData.name + ': ' + batch.selectedLanguages.join(', '));
         if (batch.warning) log('Warning: ' + batch.warning);
       });
 
       maybeResetGlobalLanguageCycle(tracking, categoryDataList);
+      delete tracking._currentRunUsedLanguages;
       saveTracking(tracking);
 
       chosenTitleEl.textContent = titleSummary.join('\n');
@@ -1067,6 +1360,7 @@
         rootFolderName: path.basename(selectedRootFolder),
         targetTrack: targetTrack,
         ignoreV1: ignoreV1,
+        slideAnchor: slideAnchor,
       }, function (result) {
         try {
           var parsed = JSON.parse(result);
@@ -1093,12 +1387,14 @@
     }
   });
 
+  extensionRoot = resolveExtensionRoot();
+  manifestPath = extensionRoot ? path.join(extensionRoot, 'CSXS', 'manifest.xml') : path.join(path.resolve(__dirname, '..'), 'CSXS', 'manifest.xml');
   restoreSettings();
   updateState.installedVersion = readManifestVersion(manifestPath) || '';
   updateState.latestVersion = loadTracking().settings.lastAvailableVersion || '';
-  setUpdateStatus(updateRepoInput.value.trim() ? 'Ready to check for updates.' : 'Enter a GitHub repo like owner/repo to enable update checks.');
+  setUpdateStatus(updateRepo ? 'Ready to check for updates.' : 'No GitHub update source is configured.');
   setUpdateUiState();
-  if (shouldBackgroundCheck()) {
+  if (updateRepo) {
     checkForUpdates({ silent: true });
   }
 })();

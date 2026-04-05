@@ -12,7 +12,7 @@
     <div class="field">
       <label>Selected root folder</label>
       <div class="row">
-        <input id="folderPath" type="text" readonly placeholder="Choose the root folder that contains the 5 category folders" />
+        <input id="folderPath" type="text" readonly placeholder="Choose the root folder that contains your slide files" />
         <button id="browseBtn">Browse</button>
       </div>
       <input id="folderPicker" type="file" webkitdirectory directory multiple hidden />
@@ -36,8 +36,11 @@
     </div>
 
     <div class="field">
-      <label for="updateRepo">GitHub repo for updates</label>
-      <input id="updateRepo" type="text" placeholder="owner/repo" />
+      <label for="slideAnchor">Slide position</label>
+      <select id="slideAnchor">
+        <option value="top-right">Top Right</option>
+        <option value="top-left">Top Left</option>
+      </select>
     </div>
 
     <div class="field">
@@ -52,10 +55,7 @@
           <strong id="latestVersion">-</strong>
         </div>
       </div>
-      <div class="row">
-        <button id="checkUpdatesBtn" type="button">Check for Updates</button>
-        <button id="installUpdateBtn" type="button" hidden>Update Now</button>
-      </div>
+      <button id="installUpdateBtn" type="button" hidden>Update Now</button>
       <pre id="updateStatus" class="info">No update check yet.</pre>
     </div>
 

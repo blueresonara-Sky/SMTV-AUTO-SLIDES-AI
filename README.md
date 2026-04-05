@@ -66,10 +66,6 @@ This means different users do not automatically share the same title memory unle
 
 ## Update Behavior
 
-The extension is configured to check this GitHub repository on startup:
-
-- `blueresonara-Sky/SMTV-AUTO-SLIDES-AI`
-
 Update flow:
 
 1. On startup, the panel checks the latest GitHub Release.
@@ -77,15 +73,7 @@ Update flow:
 3. If a newer release exists, `Update Now` appears in green.
 4. Clicking `Update Now` downloads the release zip, validates it, installs it, and prompts the user to restart Premiere Pro.
 
-For updates to work correctly, each GitHub Release must include a zip asset that contains a valid extension package with:
-
-- `CSXS/manifest.xml`
-- `client/`
-- `host/`
-- `README.md`
-
-The updater can search inside the extracted zip until it finds the extension root.
-
+For updates to work correctly, each GitHub Release must include a zip asset that contains a valid extension package. The updater can search inside the extracted zip until it finds the extension root.
 
 ## Installation
 
@@ -103,5 +91,4 @@ The updater can search inside the extracted zip until it finds the extension roo
 - `client/style.css` - panel styling
 - `client/main.js` - folder scan, title/language selection, local tracking, updater UI and install flow
 - `host/main.jsx` - Premiere import, timing logic, V1 avoidance, Motion settings, placement
-
 
