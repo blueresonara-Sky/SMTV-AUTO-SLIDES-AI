@@ -37,6 +37,43 @@ The panel works with these category folders:
 15. Check GitHub for updates automatically when the extension starts.
 16. Show a green `Update Now` button only when a newer release is available.
 
+## Changelog
+
+### v1.1.0
+
+**Smart slide placement overhaul:**
+
+1. **Gap-first placement** — when a category zone fills up, the extension now scans
+   gaps between already-placed slides and fills them before ever going sequential or
+   overflowing into the next zone. Applies to both zone-exhausted and face-blocked slides.
+
+2. **Skip + retry deferred slides** — slides that are fully face-blocked during their
+   normal pass are deferred and retried inside gaps once the rest of the category is placed.
+
+3. **Elastic re-spacing** — remaining slides divide the remaining zone time equally
+   instead of bunching at the end. The English (s1) slide always anchors at zone start.
+
+4. **Position cache** — frame exports are skipped for timecodes already checked within
+   a 1-second margin, significantly reducing analysis time on repeat positions.
+
+5. **V1-compressed zone boundaries** — category zones are calculated in V1-excluded time
+   so blocked ranges do not shrink the usable window.
+
+6. **4-pass OCRAD binarization** — text detection now tries otsu-inv → otsu → t200-inv
+   → t200, catching white italic text on bright backgrounds (e.g. blue sky) that the
+   single-pass Otsu method missed.
+
+7. **Frame log timestamps** — all log entries now show times as `m:ss:ff` at 29.97 fps
+   instead of raw seconds.
+
+8. **Run button lock** — the Import button is disabled and grayed out while processing
+   to prevent double-runs.
+
+9. **Diagnose button removed** — cleaned up the panel UI.
+
+10. **3 fixed frame samples** — face/text analysis uses exactly three sample offsets per
+    slide: 1 s (after fade-in), 4.5 s (mid-point), 8 s (near end).
+
 ## Current Motion Presets
 
 - `Top Right`

@@ -49,6 +49,19 @@ function _findProjectItemByMediaPath(binItem, mediaPath) {
     return null;
 }
 
+function _findProjectItemByMediaPathAnywhere(parentItem, mediaPath) {
+    if (!parentItem) return null;
+    if (parentItem.type !== ProjectItemType.BIN) {
+        try {
+            if (parentItem.getMediaPath && parentItem.getMediaPath() === mediaPath) {
+                return parentItem;
+            }
+        } catch (e) {}
+        return null;
+    }
+    return _findProjectItemByMediaPath(parentItem, mediaPath);
+}
+
 function _getSequenceMaxEndSeconds(seq) {
     var maxSec = 0;
     if (!seq) return maxSec;
@@ -76,6 +89,45 @@ function _getSequenceMaxEndSeconds(seq) {
     }
 
     return maxSec;
+}
+
+function _ensureProjectItemInBin(binItem, mediaPath) {
+    if (!binItem || !mediaPath) return null;
+
+    var existing = _findProjectItemByMediaPath(binItem, mediaPath);
+    if (existing) return existing;
+
+    var rootExisting = _findProjectItemByMediaPathAnywhere(app.project.rootItem, mediaPath);
+    if (rootExisting) {
+        try {
+            rootExisting.moveBin(binItem);
+        } catch (moveErr) {}
+        existing = _findProjectItemByMediaPath(binItem, mediaPath);
+        if (existing) return existing;
+        return rootExisting;
+    }
+
+    try {
+        app.project.importFiles([mediaPath], false, binItem, false);
+    } catch (e) {
+        return null;
+    }
+
+    return _findProjectItemByMediaPath(binItem, mediaPath);
+}
+
+function _getProjectItemDurationSeconds(projectItem) {
+    if (!projectItem) return 0;
+    try {
+        var inPoint = projectItem.getInPoint ? projectItem.getInPoint() : null;
+        var outPoint = projectItem.getOutPoint ? projectItem.getOutPoint(1) : null;
+        var inSeconds = inPoint && typeof inPoint.seconds === 'number' ? inPoint.seconds : 0;
+        var outSeconds = outPoint && typeof outPoint.seconds === 'number' ? outPoint.seconds : 0;
+        if (outSeconds > inSeconds) {
+            return outSeconds - inSeconds;
+        }
+    } catch (e) {}
+    return 0;
 }
 
 function _getTrackOccupiedRanges(track) {
@@ -227,6 +279,215 @@ function _getPlacementWindow(seq, fallbackEndSeconds) {
     };
 }
 
+function _joinPath(dirPath, leafName) {
+    if (!dirPath) return leafName || '';
+    if (!leafName) return dirPath;
+    var sep = '/';
+    if (Folder.fs !== 'Macintosh') {
+        sep = '\\';
+    }
+    if (dirPath.charAt(dirPath.length - 1) === '\\' || dirPath.charAt(dirPath.length - 1) === '/') {
+        return dirPath + leafName;
+    }
+    return dirPath + sep + leafName;
+}
+
+function _ensureFolder(folderPath) {
+    if (!folderPath) return false;
+    var folder = new Folder(folderPath);
+    if (folder.exists) return true;
+    return folder.create();
+}
+
+function _sanitizeFileStem(name) {
+    return String(name || 'frame').replace(/[^\w.-]+/g, '_');
+}
+
+function _findExistingFramePath(basePathWithoutExtension) {
+    var candidates = [
+        basePathWithoutExtension,
+        basePathWithoutExtension + '.png',
+        basePathWithoutExtension + '.png.png'
+    ];
+
+    for (var i = 0; i < candidates.length; i++) {
+        var file = new File(candidates[i]);
+        if (file.exists) {
+            return file.fsName;
+        }
+    }
+
+    return '';
+}
+
+function _waitForFile(stemPath, maxWaitMs) {
+    // Poll for the file since exportFramePNG writes asynchronously.
+    var candidates = [
+        stemPath,
+        stemPath + '.png',
+        stemPath + '.png.png'
+    ];
+    var waited = 0;
+    var pollMs = 120;
+    while (waited <= maxWaitMs) {
+        for (var i = 0; i < candidates.length; i++) {
+            var f = new File(candidates[i]);
+            if (f.exists && f.length > 0) return f.fsName;
+        }
+        // $.sleep is synchronous in ExtendScript
+        try { $.sleep(pollMs); } catch (e) {}
+        waited += pollMs;
+    }
+    return '';
+}
+
+function _exportSequenceFrameAtSeconds(seq, seconds, outputStemPath) {
+    var result = { ok: false, path: '', error: '' };
+    if (!seq || !outputStemPath) {
+        result.error = 'Missing sequence or output path.';
+        return result;
+    }
+
+    var originalPosition = null;
+    try { originalPosition = seq.getPlayerPosition(); } catch (e) {}
+
+    try {
+        var exportTime = new Time();
+        exportTime.seconds = Math.max(0, seconds || 0);
+        seq.setPlayerPosition(exportTime.ticks);
+
+        // Small pause so Premiere registers the new CTI position
+        try { $.sleep(80); } catch (e) {}
+
+        app.enableQE();
+        var qeSequence = qe && qe.project ? qe.project.getActiveSequence() : null;
+        if (!qeSequence || typeof qeSequence.exportFramePNG !== 'function' || !qeSequence.CTI) {
+            result.error = 'QE exportFramePNG is unavailable.';
+            return result;
+        }
+
+        var timecode = qeSequence.CTI.timecode;
+        if (!timecode) {
+            result.error = 'Could not read CTI timecode.';
+            return result;
+        }
+
+        // Delete any pre-existing file at the path to avoid stale hits
+        var candidates = [outputStemPath, outputStemPath + '.png', outputStemPath + '.png.png'];
+        for (var d = 0; d < candidates.length; d++) {
+            try { var df = new File(candidates[d]); if (df.exists) df.remove(); } catch (e) {}
+        }
+
+        qeSequence.exportFramePNG(timecode, outputStemPath);
+
+        // Wait up to 4 seconds for the async file write to complete
+        result.path = _waitForFile(outputStemPath, 4000);
+        result.ok = !!result.path;
+        if (!result.ok) {
+            result.error = 'exportFramePNG ran but no file appeared within 4s. Timecode: ' + timecode;
+        }
+    } catch (err) {
+        result.error = err.toString();
+    } finally {
+        try {
+            if (originalPosition && originalPosition.ticks) {
+                seq.setPlayerPosition(originalPosition.ticks);
+            }
+        } catch (restoreErr) {}
+    }
+
+    return result;
+}
+
+function diagnosTimelineClips() {
+    var seq = app.project.activeSequence;
+    if (!seq) return JSON.stringify({ error: 'No active sequence' });
+
+    var inSec  = 0;
+    var outSec = 9999;
+    try {
+        var ip = seq.getInPoint();
+        var op = seq.getOutPoint();
+        if (ip && typeof ip.seconds === 'number' && ip.seconds >= 0) inSec  = ip.seconds;
+        if (op && typeof op.seconds === 'number' && op.seconds  > 0) outSec = op.seconds;
+    } catch (e) {}
+
+    var fps = 25;
+    try { if (seq.timebase) fps = Math.round(1 / parseFloat(seq.timebase)); } catch(e) {}
+
+    function secToTC(s) {
+        var f  = Math.round(s * fps);
+        var fr = f % fps;
+        var ss = Math.floor(f / fps) % 60;
+        var mm = Math.floor(f / fps / 60) % 60;
+        var hh = Math.floor(f / fps / 3600);
+        function p(n) { return n < 10 ? '0'+n : ''+n; }
+        return p(hh)+':'+p(mm)+':'+p(ss)+':'+p(fr);
+    }
+
+    var lines = [];
+    lines.push('Sequence: ' + seq.name);
+    lines.push('In:  ' + inSec.toFixed(2) + 's  (' + secToTC(inSec)  + ')');
+    lines.push('Out: ' + outSec.toFixed(2) + 's  (' + secToTC(outSec) + ')');
+    lines.push('');
+
+    for (var vi = 0; vi < seq.videoTracks.length; vi++) {
+        var track = seq.videoTracks[vi];
+        var clips = track.clips;
+        var n     = clips.numItems;
+        if (!n) { lines.push('V'+(vi+1)+': (empty)'); continue; }
+        lines.push('V'+(vi+1)+': '+n+' clip(s)');
+        for (var ci = 0; ci < n; ci++) {
+            var clip   = clips[ci];
+            var cStart = clip.start.seconds;
+            var cEnd   = clip.end.seconds;
+            if (cEnd < inSec - 5 || cStart > outSec + 5) continue;
+            var flag = (cStart >= inSec - 0.1 && cStart <= outSec + 0.1) ? ' ◄' : '';
+            lines.push('  ['+cStart.toFixed(2)+'s → '+cEnd.toFixed(2)+'s]'
+                      +'  '+secToTC(cStart)+' → '+secToTC(cEnd)
+                      +'  '+clip.name+flag);
+        }
+        lines.push('');
+    }
+
+    return lines.join('\n');
+}
+
+function _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, analysisDir, fileStemBase) {
+    var framePaths = [];
+    var sampleTimes = [];
+    var exportErrors = [];
+
+    var slideDuration = 9.0;  // SMTV slides are always 9 seconds
+    var fadeIn        = 1.0;
+
+    // Fixed samples spread across the slide window.
+    // 8.0s is included specifically to catch title text that fades in ~1-2s
+    // after a scene cut — the 6s sample often lands only 0.3s into a new clip
+    // where text is still semi-transparent and unreadable by OCRAD.
+    var sampleOffsets = [
+        fadeIn,                   // 1.0s — after fade-in
+        slideDuration / 2,        // 4.5s — mid-point
+        slideDuration - fadeIn    // 8.0s — near end, catches late-appearing text
+    ];
+
+    for (var s = 0; s < sampleOffsets.length; s++) {
+        var sampleSeconds = startSeconds + sampleOffsets[s];
+        sampleTimes.push(sampleSeconds);
+        var exportResult = _exportSequenceFrameAtSeconds(seq, sampleSeconds, _joinPath(analysisDir, fileStemBase + '_sample_' + (s + 1)));
+        framePaths.push(exportResult.path || '');
+        if (!exportResult.ok && exportResult.error) {
+            exportErrors.push('sample ' + (s + 1) + ': ' + exportResult.error);
+        }
+    }
+
+    return {
+        framePaths: framePaths,
+        sampleTimes: sampleTimes,
+        exportErrors: exportErrors
+    };
+}
+
 var _NPM_LABEL_ENGLISH = 4;
 var _NPM_LABEL_NON_ENGLISH = 8;
 var _NPM_MOTION_PRESETS = {
@@ -361,6 +622,227 @@ function _applySlideMotion(trackItem, categoryName, seq, slideAnchor) {
     _setComponentPropertyValue(scale, preset.scale);
 }
 
+function _buildPlacementContext(seq, batches, targetTrackNumber, ignoreV1) {
+    var allPlacements = [];
+    var usedTimelineLengthSeconds = _getSequenceMaxEndSeconds(seq);
+
+    if (usedTimelineLengthSeconds <= 0) {
+        usedTimelineLengthSeconds = seq.end ? seq.end.seconds : 0;
+    }
+    if (usedTimelineLengthSeconds <= 0) {
+        usedTimelineLengthSeconds = 1;
+    }
+
+    for (var i = 0; i < batches.length; i++) {
+        var batch = batches[i];
+        var files = batch.files || [];
+        var languageDetails = batch.languageDetails || [];
+        for (var f = 0; f < files.length; f++) {
+            allPlacements.push({
+                placementIndex: allPlacements.length,
+                batchIndex: i,
+                fileIndex: f,
+                categoryName: batch.categoryName,
+                mediaPath: files[f],
+                language: languageDetails[f] ? languageDetails[f].name : '',
+                isEnglish: languageDetails[f] ? !!languageDetails[f].isEnglish : (f === 0),
+                warning: batch.warning || ''
+            });
+        }
+    }
+
+    var placementWindow = _getPlacementWindow(seq, usedTimelineLengthSeconds);
+    var blockedV1Ranges = ignoreV1 ? _clipRangesToWindow(_getTrackOccupiedRanges(seq.videoTracks[0]), placementWindow.start, placementWindow.end) : [];
+    var availableRanges = ignoreV1 ? _getAvailableRanges(placementWindow.end, blockedV1Ranges) : [{ start: placementWindow.start, end: placementWindow.end }];
+    if (ignoreV1) {
+        availableRanges = _clipRangesToWindow(availableRanges, placementWindow.start, placementWindow.end);
+    }
+
+    var usableTimelineLengthSeconds = _getTotalRangeLength(availableRanges);
+    if (usableTimelineLengthSeconds <= 0) {
+        usableTimelineLengthSeconds = placementWindow.end - placementWindow.start;
+        availableRanges = [{ start: placementWindow.start, end: placementWindow.end }];
+    }
+
+    var intervalSeconds = allPlacements.length > 0 ? usableTimelineLengthSeconds / allPlacements.length : 0;
+
+    for (var p = 0; p < allPlacements.length; p++) {
+        var desiredCompressedSeconds = (p + 1) * intervalSeconds;
+        allPlacements[p].startSeconds = ignoreV1 ? _mapCompressedTimeToSequenceTime(desiredCompressedSeconds, availableRanges) : (placementWindow.start + desiredCompressedSeconds);
+    }
+
+    return {
+        allPlacements: allPlacements,
+        resolvedTrackNumber: targetTrackNumber,
+        usedTimelineLengthSeconds: usedTimelineLengthSeconds,
+        usableTimelineLengthSeconds: usableTimelineLengthSeconds,
+        placementWindowStartSeconds: placementWindow.start,
+        placementWindowEndSeconds: placementWindow.end,
+        intervalSeconds: intervalSeconds,
+        blockedV1Ranges: blockedV1Ranges
+    };
+}
+
+function newPeaceMakerPreviewPlacementFrames(payloadJson) {
+    try {
+        var payload = _npmParse(payloadJson);
+        var batches = payload.batches || [];
+        var targetTrackNumber = parseInt(payload.targetTrack, 10);
+        var ignoreV1 = !!payload.ignoreV1;
+        var analysisDir = payload.analysisDir || '';
+        var exportFrames = !!payload.exportFrames;
+        var placementPlan = payload.placementPlan || null;
+
+        if (!app.project) {
+            return _npmJson({ ok: false, error: 'No open project.' });
+        }
+        if (!app.project.activeSequence) {
+            return _npmJson({ ok: false, error: 'No active sequence.' });
+        }
+        if (!batches.length) {
+            return _npmJson({ ok: false, error: 'No category batches were provided.' });
+        }
+        if (!targetTrackNumber || targetTrackNumber < 1) {
+            return _npmJson({ ok: false, error: 'Invalid target track.' });
+        }
+        if (exportFrames && (!analysisDir || !_ensureFolder(analysisDir))) {
+            return _npmJson({ ok: false, error: 'Could not create the frame analysis folder.' });
+        }
+
+        var seq = app.project.activeSequence;
+        var rootItem = app.project.rootItem;
+        var slidesBin = _findOrCreateBin(rootItem, 'Slides');
+        var context = _buildPlacementContext(seq, batches, targetTrackNumber, ignoreV1);
+        if (placementPlan && placementPlan.placements && placementPlan.placements.length === context.allPlacements.length) {
+            for (var pp = 0; pp < context.allPlacements.length; pp++) {
+                if (typeof placementPlan.placements[pp].startSeconds === 'number') {
+                    context.allPlacements[pp].startSeconds = placementPlan.placements[pp].startSeconds;
+                }
+            }
+        }
+        var placements = [];
+        var exportFailures = [];
+
+        for (var b = 0; b < batches.length; b++) {
+            var previewBatch = batches[b];
+            var previewSubBin = _findOrCreateBin(slidesBin, previewBatch.categoryName);
+            for (var x = 0; x < context.allPlacements.length; x++) {
+                if (context.allPlacements[x].batchIndex === b) {
+                    context.allPlacements[x].subBin = previewSubBin;
+                }
+            }
+        }
+
+        for (var i = 0; i < context.allPlacements.length; i++) {
+            var placement = context.allPlacements[i];
+            var projectItem = _ensureProjectItemInBin(placement.subBin, placement.mediaPath);
+            var clipDurationSeconds = _getProjectItemDurationSeconds(projectItem);
+            if (clipDurationSeconds <= 0) {
+                clipDurationSeconds = 1;
+            }
+            placement.clipDurationSeconds = clipDurationSeconds;
+            var framePaths = [];
+            var sampleTimes = [];
+            var exportErrors = [];
+            if (exportFrames) {
+                var sampleExport = _exportPlacementSampleFrames(seq, placement.startSeconds, clipDurationSeconds, analysisDir, _sanitizeFileStem((i + 1) + '_' + placement.categoryName + '_' + placement.language));
+                framePaths = sampleExport.framePaths;
+                sampleTimes = sampleExport.sampleTimes;
+                exportErrors = sampleExport.exportErrors;
+                if (exportErrors.length) {
+                    exportFailures.push('[' + (i + 1) + '] ' + exportErrors.join(' | '));
+                }
+            }
+            var anyFrameExported = false;
+            for (var fp = 0; fp < framePaths.length; fp++) {
+                if (framePaths[fp]) {
+                    anyFrameExported = true;
+                    break;
+                }
+            }
+
+            placements.push({
+                placementIndex: placement.placementIndex,
+                batchIndex: placement.batchIndex,
+                fileIndex: placement.fileIndex,
+                categoryName: placement.categoryName,
+                mediaPath: placement.mediaPath,
+                language: placement.language,
+                isEnglish: placement.isEnglish,
+                startSeconds: placement.startSeconds,
+                clipDurationSeconds: clipDurationSeconds,
+                sampleTimes: sampleTimes,
+                framePaths: framePaths,
+                framePath: framePaths.length ? framePaths[0] : '',
+                frameExported: anyFrameExported
+            });
+        }
+
+        return _npmJson({
+            ok: true,
+            placementPlan: {
+                placements: placements,
+                targetTrack: context.resolvedTrackNumber,
+                usedTimelineLengthSeconds: context.usedTimelineLengthSeconds,
+                usableTimelineLengthSeconds: context.usableTimelineLengthSeconds,
+                placementWindowStartSeconds: context.placementWindowStartSeconds,
+                placementWindowEndSeconds: context.placementWindowEndSeconds,
+                intervalSeconds: context.intervalSeconds,
+                blockedV1Ranges: context.blockedV1Ranges || []
+            },
+            frameExportFailures: exportFailures,
+            note: exportFrames ? 'Preview frames were exported from the visible active sequence frame at each planned slide time.' : 'Placement times were calculated without exporting preview frames.'
+        });
+    } catch (err) {
+        return _npmJson({ ok: false, error: err.toString() });
+    }
+}
+
+function newPeaceMakerPreviewSinglePlacement(payloadJson) {
+    try {
+        var payload = _npmParse(payloadJson);
+        var analysisDir = payload.analysisDir || '';
+        var startSeconds = typeof payload.startSeconds === 'number' ? payload.startSeconds : 0;
+        var clipDurationSeconds = typeof payload.clipDurationSeconds === 'number' ? payload.clipDurationSeconds : 1;
+        var categoryName = payload.categoryName || '';
+        var language = payload.language || '';
+        var placementIndex = typeof payload.placementIndex === 'number' ? payload.placementIndex : 0;
+
+        if (!app.project || !app.project.activeSequence) {
+            return _npmJson({ ok: false, error: 'No active sequence.' });
+        }
+        if (!analysisDir || !_ensureFolder(analysisDir)) {
+            return _npmJson({ ok: false, error: 'Could not create the frame analysis folder.' });
+        }
+
+        var seq = app.project.activeSequence;
+        var sampleExport = _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, analysisDir, _sanitizeFileStem((placementIndex + 1) + '_' + categoryName + '_' + language));
+        var anyFrameExported = false;
+        for (var i = 0; i < sampleExport.framePaths.length; i++) {
+            if (sampleExport.framePaths[i]) {
+                anyFrameExported = true;
+                break;
+            }
+        }
+
+        return _npmJson({
+            ok: true,
+            placementPreview: {
+                placementIndex: placementIndex,
+                startSeconds: startSeconds,
+                clipDurationSeconds: clipDurationSeconds,
+                sampleTimes: sampleExport.sampleTimes,
+                framePaths: sampleExport.framePaths,
+                framePath: sampleExport.framePaths.length ? sampleExport.framePaths[0] : '',
+                frameExported: anyFrameExported
+            },
+            exportErrors: sampleExport.exportErrors
+        });
+    } catch (err) {
+        return _npmJson({ ok: false, error: err.toString() });
+    }
+}
+
 function newPeaceMakerImportAndPlaceMulti(payloadJson) {
     try {
         var payload = _npmParse(payloadJson);
@@ -368,6 +850,7 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
         var targetTrackNumber = parseInt(payload.targetTrack, 10);
         var ignoreV1 = !!payload.ignoreV1;
         var slideAnchor = payload.slideAnchor || 'top-right';
+        var placementPlan = payload.placementPlan || null;
 
         if (!app.project) {
             return _npmJson({ ok: false, error: 'No open project.' });
@@ -385,50 +868,24 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
         var rootItem = app.project.rootItem;
         var slidesBin = _findOrCreateBin(rootItem, 'Slides');
         var seq = app.project.activeSequence;
-        var allPlacements = [];
+        var context = _buildPlacementContext(seq, batches, targetTrackNumber, ignoreV1);
+        var allPlacements = context.allPlacements;
         var results = [];
 
         for (var i = 0; i < batches.length; i++) {
             var batch = batches[i];
             var subBin = _findOrCreateBin(slidesBin, batch.categoryName);
             var files = batch.files || [];
-            var languageDetails = batch.languageDetails || [];
             app.project.importFiles(files, false, subBin, false);
-            for (var f = 0; f < files.length; f++) {
-                allPlacements.push({
-                    categoryName: batch.categoryName,
-                    mediaPath: files[f],
-                    language: languageDetails[f] ? languageDetails[f].name : '',
-                    isEnglish: languageDetails[f] ? !!languageDetails[f].isEnglish : (f === 0),
-                    subBin: subBin,
-                    warning: batch.warning || ''
-                });
+            for (var p = 0; p < allPlacements.length; p++) {
+                if (allPlacements[p].batchIndex === i) {
+                    allPlacements[p].subBin = subBin;
+                }
             }
         }
 
-        var usedTimelineLengthSeconds = _getSequenceMaxEndSeconds(seq);
-        if (usedTimelineLengthSeconds <= 0) {
-            usedTimelineLengthSeconds = seq.end ? seq.end.seconds : 0;
-        }
-        if (usedTimelineLengthSeconds <= 0) {
-            usedTimelineLengthSeconds = 1;
-        }
-
-        var placementWindow = _getPlacementWindow(seq, usedTimelineLengthSeconds);
         var totalCount = allPlacements.length;
-        var blockedV1Ranges = ignoreV1 ? _clipRangesToWindow(_getTrackOccupiedRanges(seq.videoTracks[0]), placementWindow.start, placementWindow.end) : [];
-        var availableRanges = ignoreV1 ? _getAvailableRanges(placementWindow.end, blockedV1Ranges) : [{ start: placementWindow.start, end: placementWindow.end }];
-        if (ignoreV1) {
-            availableRanges = _clipRangesToWindow(availableRanges, placementWindow.start, placementWindow.end);
-        }
-        var usableTimelineLengthSeconds = _getTotalRangeLength(availableRanges);
-        if (usableTimelineLengthSeconds <= 0) {
-            usableTimelineLengthSeconds = placementWindow.end - placementWindow.start;
-            availableRanges = [{ start: placementWindow.start, end: placementWindow.end }];
-        }
-        var intervalSeconds = totalCount > 0 ? usableTimelineLengthSeconds / totalCount : 0;
-
-        var resolvedTrackNumber = targetTrackNumber;
+        var resolvedTrackNumber = context.resolvedTrackNumber;
 
         var trackIndex = resolvedTrackNumber - 1;
         while (seq.videoTracks.numTracks <= trackIndex) {
@@ -436,36 +893,37 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
         }
         var destTrack = seq.videoTracks[trackIndex];
 
-        for (var p = 0; p < allPlacements.length; p++) {
-            var placement = allPlacements[p];
+        for (var j = 0; j < allPlacements.length; j++) {
+            var placement = allPlacements[j];
             var projectItem = _findProjectItemByMediaPath(placement.subBin, placement.mediaPath);
             if (!projectItem) {
                 continue;
             }
             _setProjectItemLabel(projectItem, placement.isEnglish);
             var when = new Time();
-            var desiredCompressedSeconds = (p + 1) * intervalSeconds;
-            when.seconds = ignoreV1 ? _mapCompressedTimeToSequenceTime(desiredCompressedSeconds, availableRanges) : desiredCompressedSeconds;
-            if (!ignoreV1) {
-                when.seconds = placementWindow.start + desiredCompressedSeconds;
+            if (placementPlan && placementPlan.placements && placementPlan.placements.length > j && typeof placementPlan.placements[j].startSeconds === 'number') {
+                when.seconds = placementPlan.placements[j].startSeconds;
+                placement.resolvedAnchor = placementPlan.placements[j].resolvedAnchor || slideAnchor;
+            } else if (typeof placement.startSeconds === 'number') {
+                when.seconds = placement.startSeconds;
             }
             destTrack.overwriteClip(projectItem, when);
             var insertedClip = _findTrackItemByStartSeconds(destTrack, when.seconds);
-            _applySlideMotion(insertedClip, placement.categoryName, seq, slideAnchor);
+            _applySlideMotion(insertedClip, placement.categoryName, seq, placement.resolvedAnchor || slideAnchor);
         }
 
-        for (var j = 0; j < batches.length; j++) {
-            var batchResult = batches[j];
+        for (var k = 0; k < batches.length; k++) {
+            var batchResult = batches[k];
             results.push({
                 categoryName: batchResult.categoryName,
                 targetTrack: resolvedTrackNumber,
                 importedCount: (batchResult.files || []).length,
                 placedCount: (batchResult.files || []).length,
-                usedTimelineLengthSeconds: usedTimelineLengthSeconds,
-                usableTimelineLengthSeconds: usableTimelineLengthSeconds,
-                placementWindowStartSeconds: placementWindow.start,
-                placementWindowEndSeconds: placementWindow.end,
-                intervalSeconds: intervalSeconds,
+                usedTimelineLengthSeconds: context.usedTimelineLengthSeconds,
+                usableTimelineLengthSeconds: context.usableTimelineLengthSeconds,
+                placementWindowStartSeconds: context.placementWindowStartSeconds,
+                placementWindowEndSeconds: context.placementWindowEndSeconds,
+                intervalSeconds: context.intervalSeconds,
                 warning: batchResult.warning || ''
             });
         }
@@ -475,12 +933,12 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
             results: results,
             targetTrack: resolvedTrackNumber,
             totalPlacedCount: totalCount,
-            usedTimelineLengthSeconds: usedTimelineLengthSeconds,
-            usableTimelineLengthSeconds: usableTimelineLengthSeconds,
-            placementWindowStartSeconds: placementWindow.start,
-            placementWindowEndSeconds: placementWindow.end,
-            intervalSeconds: intervalSeconds,
-            note: 'All selected clips were placed on a single video track using one shared interval calculated as used timeline length divided by total selected slides.'
+            usedTimelineLengthSeconds: context.usedTimelineLengthSeconds,
+            usableTimelineLengthSeconds: context.usableTimelineLengthSeconds,
+            placementWindowStartSeconds: context.placementWindowStartSeconds,
+            placementWindowEndSeconds: context.placementWindowEndSeconds,
+            intervalSeconds: context.intervalSeconds,
+            note: placementPlan ? 'All selected clips were placed using panel-resolved safe times on a single video track.' : 'All selected clips were placed on a single video track using one shared interval calculated as used timeline length divided by total selected slides.'
         });
     } catch (err) {
         return _npmJson({ ok: false, error: err.toString() });

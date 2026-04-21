@@ -110,6 +110,56 @@ button:hover {
   display: block;
   font-size: 15px;
 }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 9999;
+}
+.modal-backdrop.is-open {
+  display: flex;
+}
+.modal-card {
+  width: min(520px, 100%);
+  max-height: 80vh;
+  background: #202225;
+  border: 1px solid #4f5258;
+  border-radius: 10px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+.modal-title {
+  padding: 14px 16px 10px;
+  font-size: 18px;
+  font-weight: bold;
+  border-bottom: 1px solid #3f434a;
+}
+.modal-body {
+  padding: 14px 16px;
+  white-space: pre-wrap;
+  overflow: auto;
+  line-height: 1.45;
+  color: #f3f3f3;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid #3f434a;
+}
+.modal-actions button {
+  min-width: 92px;
+}
+.secondary-btn {
+  background: #2d2f33;
+  border-color: #5a5e66;
+}
 #status {
   min-height: 170px;
   background: #101010;
