@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
     ExtensionBundleId="com.rainbowgamma.newpeacemaker"
-    ExtensionBundleVersion="1.0.5"
+    ExtensionBundleVersion="1.1.0"
     ExtensionBundleName="SMTV Auto Slides">
     <ExtensionList>
-        <Extension Id="com.rainbowgamma.newpeacemaker.panel" Version="1.0.5" />
+        <Extension Id="com.rainbowgamma.newpeacemaker.panel" Version="1.1.0" />
     </ExtensionList>
     <ExecutionEnvironment>
         <HostList>
