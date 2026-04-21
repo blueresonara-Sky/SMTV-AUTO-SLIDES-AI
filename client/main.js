@@ -20,6 +20,11 @@
   var latestVersionEl = document.getElementById('latestVersion');
   var installUpdateBtn = document.getElementById('installUpdateBtn');
   var updateStatusEl = document.getElementById('updateStatus');
+  var updateModalEl = document.getElementById('updateModal');
+  var updateModalTitleEl = document.getElementById('updateModalTitle');
+  var updateModalBodyEl = document.getElementById('updateModalBody');
+  var updateModalCancelBtn = document.getElementById('updateModalCancelBtn');
+  var updateModalOkBtn = document.getElementById('updateModalOkBtn');
   var statusEl = document.getElementById('status');
   var chosenTitleEl = document.getElementById('chosenTitle');
   var chosenLanguagesEl = document.getElementById('chosenLanguages');
@@ -29,6 +34,9 @@
   var manifestPath = '';
   var trackingDir = path.join(os.homedir(), '.new-peace-maker');
   var trackingFile = path.join(trackingDir, 'usage-history.json');
+  var updateInstallStatusFile = path.join(trackingDir, 'update-install-status.json');
+  var TEST_UPDATE_FLAG_FILE = 'smtv-auto-slides-test-updates.flag';
+  var UPDATE_CHANNEL_STORAGE_KEY = 'smtvAutoSlides_updateChannel';
   var categoryOrder = ['NEW PEACE MAKER', 'Be Vegan Keep Peace', 'Forgiveness', 'Save the Earth', 'Veganism'];
   var ignoredFolderNames = { 'AFTERCODECS HAP ALPHA': true };
   var updateRepo = 'blueresonara-Sky/SMTV-AUTO-SLIDES-AI';
@@ -53,6 +61,9 @@
         slideAnchor: 'top-right',
         lastUpdateCheckAt: '',
         lastAvailableVersion: '',
+        pendingUpdateVersion: '',
+        pendingUpdateName: '',
+        pendingUpdateNotes: '',
       }
     };
   }
@@ -136,6 +147,9 @@
       if (typeof parsed.settings.slideAnchor === 'undefined') parsed.settings.slideAnchor = base.settings.slideAnchor;
       if (typeof parsed.settings.lastUpdateCheckAt === 'undefined') parsed.settings.lastUpdateCheckAt = base.settings.lastUpdateCheckAt;
       if (typeof parsed.settings.lastAvailableVersion === 'undefined') parsed.settings.lastAvailableVersion = base.settings.lastAvailableVersion;
+      if (typeof parsed.settings.pendingUpdateVersion === 'undefined') parsed.settings.pendingUpdateVersion = base.settings.pendingUpdateVersion;
+      if (typeof parsed.settings.pendingUpdateName === 'undefined') parsed.settings.pendingUpdateName = base.settings.pendingUpdateName;
+      if (typeof parsed.settings.pendingUpdateNotes === 'undefined') parsed.settings.pendingUpdateNotes = base.settings.pendingUpdateNotes;
       return parsed;
     } catch (e) {
       return defaultTracking();
@@ -145,6 +159,30 @@
   function saveTracking(data) {
     ensureTrackingFile();
     fs.writeFileSync(trackingFile, JSON.stringify(data, null, 2), 'utf8');
+  }
+
+  function loadUpdateInstallStatus() {
+    ensureTrackingFile();
+    try {
+      if (!fs.existsSync(updateInstallStatusFile)) return null;
+      return JSON.parse(fs.readFileSync(updateInstallStatusFile, 'utf8'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveUpdateInstallStatus(data) {
+    ensureTrackingFile();
+    fs.writeFileSync(updateInstallStatusFile, JSON.stringify(data || {}, null, 2), 'utf8');
+  }
+
+  function clearUpdateInstallStatus() {
+    ensureTrackingFile();
+    try {
+      if (fs.existsSync(updateInstallStatusFile)) {
+        fs.unlinkSync(updateInstallStatusFile);
+      }
+    } catch (e) {}
   }
 
   function persistSettings() {
@@ -228,6 +266,144 @@
     tracking.settings.lastUpdateCheckAt = new Date().toISOString();
     tracking.settings.lastAvailableVersion = latestVersion || '';
     saveTracking(tracking);
+  }
+
+  function savePendingUpdateInfo(version, name, notes) {
+    var tracking = loadTracking();
+    tracking.settings.pendingUpdateVersion = version || '';
+    tracking.settings.pendingUpdateName = name || '';
+    tracking.settings.pendingUpdateNotes = notes || '';
+    saveTracking(tracking);
+  }
+
+  function clearPendingUpdateInfo() {
+    savePendingUpdateInfo('', '', '');
+  }
+
+  function getPendingUpdateInfo() {
+    var tracking = loadTracking();
+    return {
+      version: tracking.settings.pendingUpdateVersion || '',
+      name: tracking.settings.pendingUpdateName || '',
+      notes: tracking.settings.pendingUpdateNotes || ''
+    };
+  }
+
+  function getReleaseNotes(release) {
+    var body = release && release.body ? String(release.body) : '';
+    var name = release && (release.name || release.tag_name) ? String(release.name || release.tag_name) : '';
+    var notes = body.replace(/\r/g, '').trim();
+    if (!notes) {
+      notes = name ? ('Release: ' + name) : 'No release notes were provided for this update.';
+    }
+    if (notes.length > 4000) {
+      notes = notes.substring(0, 4000).replace(/\s+\S*$/, '') + '\n\n...';
+    }
+    return notes;
+  }
+
+  function setModalOpen(isOpen) {
+    if (!updateModalEl) return;
+    updateModalEl.className = isOpen ? 'modal-backdrop is-open' : 'modal-backdrop';
+  }
+
+  function showUpdateModal(title, message, options) {
+    return new Promise(function (resolve) {
+      if (!updateModalEl || !updateModalTitleEl || !updateModalBodyEl || !updateModalOkBtn || !updateModalCancelBtn) {
+        if (options && options.confirm) {
+          resolve(window.confirm(title + '\n\n' + message));
+        } else {
+          window.alert(title + '\n\n' + message);
+          resolve(true);
+        }
+        return;
+      }
+
+      updateModalTitleEl.textContent = title;
+      updateModalBodyEl.textContent = message;
+      updateModalOkBtn.textContent = options && options.okText ? options.okText : 'OK';
+      updateModalCancelBtn.textContent = options && options.cancelText ? options.cancelText : 'Cancel';
+      updateModalCancelBtn.style.display = options && options.confirm ? 'inline-block' : 'none';
+
+      function cleanup(result) {
+        updateModalOkBtn.removeEventListener('click', onOk);
+        updateModalCancelBtn.removeEventListener('click', onCancel);
+        updateModalEl.removeEventListener('click', onBackdrop);
+        setModalOpen(false);
+        resolve(result);
+      }
+
+      function onOk() { cleanup(true); }
+      function onCancel() { cleanup(false); }
+      function onBackdrop(evt) {
+        if (evt.target === updateModalEl && options && options.confirm) {
+          cleanup(false);
+        }
+      }
+
+      updateModalOkBtn.addEventListener('click', onOk);
+      updateModalCancelBtn.addEventListener('click', onCancel);
+      updateModalEl.addEventListener('click', onBackdrop);
+      setModalOpen(true);
+    });
+  }
+
+  function buildUpdateNotesMessage(release, prefix) {
+    var message = '';
+    var version = getReleaseVersion(release) || updateState.latestVersion || '';
+    if (prefix) {
+      message += prefix + '\n\n';
+    }
+    message += 'What is new in ' + version + ':\n\n' + getReleaseNotes(release);
+    return message;
+  }
+
+  function isTestUpdateChannelEnabled() {
+    try {
+      if (localStorage.getItem(UPDATE_CHANNEL_STORAGE_KEY) === 'test') {
+        return true;
+      }
+    } catch (e) {}
+
+    try {
+      var root = extensionRoot || resolveExtensionRoot();
+      return !!(root && fs.existsSync(path.join(root, TEST_UPDATE_FLAG_FILE)));
+    } catch (e1) {
+      return false;
+    }
+  }
+
+  function requestLatestRelease(repo, callback) {
+    requestJson('https://api.github.com/repos/' + repo + '/releases/latest', callback);
+  }
+
+  function requestReleases(repo, callback) {
+    requestJson('https://api.github.com/repos/' + repo + '/releases?per_page=20', callback);
+  }
+
+  function getUpdateRelease(callback) {
+    if (!isTestUpdateChannelEnabled()) {
+      requestLatestRelease(updateRepo, callback);
+      return;
+    }
+
+    requestReleases(updateRepo, function (err, releases) {
+      if (err) {
+        callback(err);
+        return;
+      }
+      if (Array.isArray(releases)) {
+        for (var i = 0; i < releases.length; i++) {
+          var release = releases[i];
+          if (!release || release.draft || !release.prerelease) continue;
+          if (compareVersions(getReleaseVersion(release), updateState.installedVersion) > 0 && getReleaseZipAsset(release)) {
+            callback(null, release);
+            return;
+          }
+        }
+      }
+      requestLatestRelease(updateRepo, callback);
+    });
   }
 
   function getGitHubReleaseApiUrl(repo) {
@@ -422,15 +598,26 @@
       '$SourceDir = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(extractedRoot)),
       '$TargetDir = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(extensionRoot)),
       '$TempRoot = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(tempRoot)),
+      '$StatusFile = ' + quotePowerShellLiteral(stripWindowsExtendedPathPrefix(updateInstallStatusFile)),
       '$Version = ' + quotePowerShellLiteral(latestVersion || ''),
+      '',
+      'function Write-UpdateStatus($State, $Message) {',
+      '  @{',
+      "    state = $State",
+      "    version = $Version",
+      "    message = $Message",
+      "    updatedAt = (Get-Date).ToString('o')",
+      '  } | ConvertTo-Json | Set-Content -LiteralPath $StatusFile -Encoding UTF8',
+      '}',
       '',
       'function Wait-ForPremiereExit {',
       '  $deadline = (Get-Date).AddMinutes(30)',
       '  while ((Get-Date) -lt $deadline) {',
-      "    $running = Get-Process -Name 'Adobe Premiere Pro','CEPHtmlEngine' -ErrorAction SilentlyContinue",
+      "    $running = Get-Process -Name 'Adobe Premiere Pro' -ErrorAction SilentlyContinue",
       '    if (-not $running) { return }',
       '    Start-Sleep -Seconds 2',
       '  }',
+      "  throw 'Premiere Pro did not close in time for the update to finish.'",
       '}',
       '',
       'function Install-UpdateFiles {',
@@ -438,7 +625,7 @@
       '    New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null',
       '  }',
       '',
-      '  for ($i = 0; $i -lt 120; $i++) {',
+      '  for ($i = 0; $i -lt 180; $i++) {',
       '    try {',
       '      Get-ChildItem -LiteralPath $TargetDir -Force -ErrorAction SilentlyContinue | ForEach-Object {',
       '        Remove-Item -LiteralPath $_.FullName -Recurse -Force',
@@ -448,17 +635,20 @@
       '      }',
       '      return',
       '    } catch {',
-      '      Start-Sleep -Seconds 2',
+      '      Start-Sleep -Seconds 1',
       '    }',
       '  }',
       "  throw 'Could not replace the extension files after waiting for Premiere Pro to close.'",
       '}',
       '',
       'try {',
+      "  Write-UpdateStatus 'pending' ('Waiting for Premiere Pro to close before installing version ' + $Version + '.')",
       '  Wait-ForPremiereExit',
       '  Install-UpdateFiles',
+      "  Write-UpdateStatus 'success' ('Version ' + $Version + ' was installed successfully.')",
       '  try { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}',
       '} catch {',
+      "  Write-UpdateStatus 'failed' $_.Exception.Message",
       "  Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue | Out-Null",
       "  [System.Windows.MessageBox]::Show('SMTV Auto Slides update failed: ' + $_.Exception.Message, 'SMTV Auto Slides Updater') | Out-Null",
       '  exit 1',
@@ -514,7 +704,7 @@
     setUpdateStatus(opts.silent ? 'Checking for updates in background...' : 'Checking for updates...');
     setUpdateUiState();
 
-    requestJson(getGitHubReleaseApiUrl(updateRepo), function (err, release) {
+    getUpdateRelease(function (err, release) {
       updateState.checking = false;
       if (err) {
         updateState.latestRelease = null;
@@ -555,64 +745,81 @@
       return;
     }
 
-    if (!window.confirm('Install version ' + latestVersion + ' from ' + updateRepo + ' now? Premiere Pro should be restarted after the update.')) {
-      return;
-    }
+    showUpdateModal(
+      'Install Update',
+      buildUpdateNotesMessage(release, 'Install version ' + latestVersion + ' from ' + updateRepo + ' now?\nPremiere Pro should be restarted after the update.'),
+      { confirm: true, okText: 'Install', cancelText: 'Cancel' }
+    ).then(function (confirmed) {
+      if (!confirmed) {
+        return;
+      }
 
-    updateState.installing = true;
-    setUpdateStatus('Downloading update...');
-    setUpdateUiState();
-
-    var tempRoot = getTempPath(String(Date.now()));
-    var zipPath = path.join(tempRoot, 'update.zip');
-    var extractPath = path.join(tempRoot, 'extracted');
-
-    try {
-      ensureDir(tempRoot);
-    } catch (e) {
-      updateState.installing = false;
-      setUpdateStatus('Could not prepare temp update folder: ' + e.message);
+      updateState.installing = true;
+      setUpdateStatus('Downloading update...');
       setUpdateUiState();
-      return;
-    }
+      savePendingUpdateInfo(latestVersion, release.name || release.tag_name || latestVersion, getReleaseNotes(release));
 
-    downloadFile(zipAsset.browser_download_url, zipPath, function (downloadErr) {
-      if (downloadErr) {
+      var tempRoot = getTempPath(String(Date.now()));
+      var zipPath = path.join(tempRoot, 'update.zip');
+      var extractPath = path.join(tempRoot, 'extracted');
+
+      try {
+        ensureDir(tempRoot);
+      } catch (e) {
         updateState.installing = false;
-        setUpdateStatus('Update download failed: ' + downloadErr.message);
+        setUpdateStatus('Could not prepare temp update folder: ' + e.message);
         setUpdateUiState();
         return;
       }
 
-      try {
-        setUpdateStatus('Extracting update...');
-        extractZip(zipPath, extractPath);
-        var extractedExtensionRoot = findExtensionRoot(extractPath);
-        if (!extractedExtensionRoot) {
-          throw new Error('Could not find the extension root in the downloaded zip.');
-        }
-
-        if (process.platform === 'win32') {
-          setUpdateStatus('Preparing update installer...');
-          launchWindowsDeferredInstaller(extractedExtensionRoot, tempRoot, latestVersion);
+      downloadFile(zipAsset.browser_download_url, zipPath, function (downloadErr) {
+        if (downloadErr) {
           updateState.installing = false;
-          setUpdateStatus('Update is staged. Accept the Windows prompt, then close Premiere Pro. The installer will finish after Premiere exits and update to version ' + latestVersion + '.');
+          setUpdateStatus('Update download failed: ' + downloadErr.message);
           setUpdateUiState();
           return;
         }
 
-        setUpdateStatus('Installing update...');
-        installExtractedExtension(extractedExtensionRoot);
-        updateState.installedVersion = readManifestVersion(manifestPath) || latestVersion;
-        updateState.installing = false;
-        updateState.latestRelease = compareVersions(updateState.latestVersion, updateState.installedVersion) > 0 ? updateState.latestRelease : null;
-        setUpdateStatus('Update installed. Please restart Premiere Pro to load version ' + updateState.installedVersion + '.');
-        setUpdateUiState();
-      } catch (installErr) {
-        updateState.installing = false;
-        setUpdateStatus('Update install failed: ' + installErr.message);
-        setUpdateUiState();
-      }
+        try {
+          setUpdateStatus('Extracting update...');
+          extractZip(zipPath, extractPath);
+          var extractedExtensionRoot = findExtensionRoot(extractPath);
+          if (!extractedExtensionRoot) {
+            throw new Error('Could not find the extension root in the downloaded zip.');
+          }
+
+          if (process.platform === 'win32') {
+            setUpdateStatus('Preparing update installer...');
+            saveUpdateInstallStatus({
+              state: 'staged',
+              version: latestVersion,
+              message: 'Update is staged and waiting for Windows approval.',
+              updatedAt: new Date().toISOString()
+            });
+            launchWindowsDeferredInstaller(extractedExtensionRoot, tempRoot, latestVersion);
+            updateState.installing = false;
+            setUpdateStatus('Update is staged. Accept the Windows prompt, then close Premiere Pro and wait a few seconds before reopening. The installer will finish after Premiere exits and update to version ' + latestVersion + '.');
+            setUpdateUiState();
+            return;
+          }
+
+          setUpdateStatus('Installing update...');
+          installExtractedExtension(extractedExtensionRoot);
+          updateState.installedVersion = readManifestVersion(manifestPath) || latestVersion;
+          updateState.installing = false;
+          clearUpdateInstallStatus();
+          updateState.latestRelease = compareVersions(updateState.latestVersion, updateState.installedVersion) > 0 ? updateState.latestRelease : null;
+          setUpdateStatus('Update installed. Please restart Premiere Pro to load version ' + updateState.installedVersion + '.');
+          setUpdateUiState();
+          showUpdateModal('Update Installed', buildUpdateNotesMessage(release, 'The update was installed successfully.'), { okText: 'OK' }).then(function () {
+            clearPendingUpdateInfo();
+          });
+        } catch (installErr) {
+          updateState.installing = false;
+          setUpdateStatus('Update install failed: ' + installErr.message);
+          setUpdateUiState();
+        }
+      });
     });
   }
 
@@ -1483,7 +1690,34 @@
   restoreSettings();
   updateState.installedVersion = readManifestVersion(manifestPath) || '';
   updateState.latestVersion = loadTracking().settings.lastAvailableVersion || '';
-  setUpdateStatus(updateRepo ? 'Ready to check for updates.' : 'No GitHub update source is configured.');
+  var updateInstallStatus = loadUpdateInstallStatus();
+  var pendingUpdateInfo = getPendingUpdateInfo();
+  var justCompletedUpdate = false;
+  if (updateInstallStatus && updateInstallStatus.state === 'success' && compareVersions(updateState.installedVersion, updateInstallStatus.version) >= 0) {
+    justCompletedUpdate = true;
+    setUpdateStatus('Update installed successfully.');
+    showUpdateModal(
+      'What Is New',
+      buildUpdateNotesMessage({
+        tag_name: pendingUpdateInfo.version || updateInstallStatus.version || updateState.installedVersion,
+        name: pendingUpdateInfo.name || updateInstallStatus.version || updateState.installedVersion,
+        body: pendingUpdateInfo.notes || ''
+      }, 'The update was installed successfully.'),
+      { okText: 'OK' }
+    ).then(function () {
+      clearUpdateInstallStatus();
+      clearPendingUpdateInfo();
+    });
+    updateInstallStatus = null;
+  }
+
+  if (updateInstallStatus && updateInstallStatus.state === 'failed') {
+    setUpdateStatus('Previous update failed: ' + (updateInstallStatus.message || 'Unknown error') + '.');
+  } else if (updateInstallStatus && (updateInstallStatus.state === 'staged' || updateInstallStatus.state === 'pending')) {
+    setUpdateStatus('A staged update to version ' + (updateInstallStatus.version || '?') + ' is still pending. Close Premiere Pro fully and wait a few seconds before reopening. If Windows asked for permission, accept the prompt.');
+  } else if (!justCompletedUpdate) {
+    setUpdateStatus(updateRepo ? 'Ready to check for updates.' : 'No GitHub update source is configured.');
+  }
   setUpdateUiState();
   if (updateRepo) {
     checkForUpdates({ silent: true });
