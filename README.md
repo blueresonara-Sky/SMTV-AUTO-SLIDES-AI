@@ -36,8 +36,71 @@ The panel works with these category folders:
 14. Label English and non-English source items with different Premiere label colors.
 15. Check GitHub for updates automatically when the extension starts.
 16. Show a green `Update Now` button only when a newer release is available.
+17. Optionally **avoid heads/faces** in the visible frame using TinyFaceDetector,
+    shifting slides in time to find clear moments.
+18. Optionally **group slides per category** (new in v2.0.0) — pack all slides
+    of a category back-to-back with a 0.5 s gap, leaving longer gaps between
+    category groups. V1 and face avoidance are bypassed in this mode.
+19. Place **Quan-Yin and SMTV Max** ad-cards from a second tab, with English
+    A/B alternation, language cycle tracking, and cross-folder overlap
+    avoidance.
+20. Use `coco-ssd` person detection plus 4-pass OCRAD text detection to skip
+    over presenters and broadcast captions when placing QYM slides.
 
 ## Changelog
+
+### v2.0.0
+
+**Quan-Yin & SMTV Max tab + smarter slides tab:**
+
+1. **New "Quan-Yin & Max" tab (QYM)** — a second tab dedicated to placing PNG
+   ad-cards from the *Quan-Yin* and *SMTV Max* slide folders. Picks slides
+   automatically from a language cycle, places them on a high video track at
+   a fixed top-right position with crossfade, and labels them by type.
+
+2. **Quan-Yin English A/B toggle** — alternates between `ENGLISH A` and
+   `ENGLISH B` Quan-Yin slides on every run.
+
+3. **Cross-folder language overlap avoidance** — when both Quan-Yin and SMTV
+   Max are placed in the same run, the picker skips a non-English language in
+   one folder if its canonical equivalent is already chosen in the other
+   (e.g. Quan-Yin "Persian" ↔ SMTV Max "PER" → both map to `fa`).
+
+4. **Slide-type filter for QYM** — choose `Both`, `Quan-Yin only`, or
+   `SMTV Max only` directly from the tab.
+
+5. **Person + text avoidance for QYM** — uses `coco-ssd` to skip frames where
+   a person overlaps the top-right region, and falls back to a 4-pass OCRAD
+   text scan when no person is detected, so slides do not land on broadcast
+   captions or presenter ribbons.
+
+6. **Per-frame debug export (hidden)** — annotated debug frames can be saved
+   to `~/qym-debug/<run>/` for troubleshooting; the UI checkbox is hidden in
+   2.0.0 but the underlying writer is intact and can be re-enabled by
+   uncommenting the field in `client/index.html`.
+
+7. **Group slides per category** *(slides tab)* — new option that packs all
+   slides within a category back-to-back with a small 0.5 s gap, leaving the
+   leftover zone time as the gap *between* category groups. In this mode
+   both V1 avoidance and face/head detection are bypassed so slides land
+   exactly at the packed positions.
+
+8. **Per-category sort by start time** *(slides tab)* — placements within
+   each category are sorted by `startSeconds` after the placement plan
+   resolves, so the English slide (`files[0]`) always maps to the earliest
+   timecode in its category, even when gap insertion shuffles slot order.
+
+9. **Drop-frame timecode in logs** — `secToMS` now uses the proper SMPTE
+   29.97 drop-frame algorithm, so log labels match Premiere's displayed
+   timecode exactly (the previous NDF math drifted ~2 frames per minute).
+
+10. **Frame export filename includes timestamp** — debug-frame filenames now
+    embed the source time as `_t<sec>s<cs>` so they can be matched back to a
+    timeline position regardless of DF/NDF handling.
+
+11. **Loading banner with model status** — at startup the panel shows a
+    banner that tracks which detection models are still loading and dims
+    the panel until all are ready, then auto-hides.
 
 ### v1.1.0
 

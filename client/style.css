@@ -5,12 +5,61 @@ body {
   color: #f2f2f2;
   font-family: Arial, sans-serif;
 }
+.app-shell {
+  padding: 16px 16px 0;
+}
 .wrap {
-  padding: 16px;
+  padding: 0;
 }
 h1 {
   font-size: 20px;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
+}
+
+/* ── Tab navigation ───────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 14px;
+  border-bottom: 2px solid #444;
+}
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  padding: 7px 18px;
+  color: #aaa;
+  cursor: pointer;
+  border-radius: 0;
+  font-size: 13px;
+  font-family: inherit;
+}
+.tab-btn.active {
+  color: #fff;
+  border-bottom-color: #0d6efd;
+  font-weight: bold;
+}
+.tab-btn:hover:not(.active) {
+  color: #ddd;
+}
+.tab-panel {
+  display: none;
+  padding-bottom: 16px;
+}
+.tab-panel.active {
+  display: block;
+}
+
+/* ── QYM status log (taller than default .info) ─────── */
+#qymStatus {
+  min-height: 150px;
+  background: #101010;
+  border: 1px solid #444;
+  padding: 10px;
+  border-radius: 4px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 .field {
   margin-bottom: 14px;
@@ -78,6 +127,86 @@ button.update-available {
 }
 button:hover {
   filter: brightness(1.08);
+}
+
+/* ── Loading banner shown while detection models initialise ── */
+.loading-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #233a55;
+  border: 2px solid #4a7ab8;
+  color: #ffffff;
+  padding: 14px 18px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 0.2px;
+  box-shadow: 0 2px 8px rgba(74, 122, 184, 0.25);
+}
+.loading-banner.hidden {
+  display: none;
+}
+
+/* While models are loading, fade out everything else in the app shell so
+   it's obvious the panel isn't ready for input yet. The banner itself is
+   excluded so it stays bright and readable. */
+.app-shell.models-loading > *:not(.loading-banner) {
+  opacity: 0.35;
+  filter: grayscale(50%);
+  pointer-events: none;
+  transition: opacity 0.3s ease, filter 0.3s ease;
+  user-select: none;
+}
+.app-shell.models-loading > h1 {
+  /* Keep the title slightly visible — it's just a label, no interaction. */
+  opacity: 0.5;
+}
+.app-shell:not(.models-loading) > * {
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+.loading-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: qym-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes qym-spin {
+  to { transform: rotate(360deg); }
+}
+button:disabled,
+button.primary:disabled {
+  background: #555;
+  border-color: #555;
+  color: #aaa;
+  cursor: not-allowed;
+  filter: none;
+  opacity: 0.7;
+}
+button:disabled:hover,
+button.primary:disabled:hover {
+  filter: none;
+}
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #f2f2f2;
+  cursor: pointer;
+}
+.radio input[type="radio"] {
+  width: auto;
+  margin: 0;
 }
 .info {
   min-height: 18px;

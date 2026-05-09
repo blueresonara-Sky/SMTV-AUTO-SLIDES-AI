@@ -453,28 +453,53 @@ function diagnosTimelineClips() {
     return lines.join('\n');
 }
 
-function _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, analysisDir, fileStemBase) {
+function _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, analysisDir, fileStemBase, categoryName) {
     var framePaths = [];
     var sampleTimes = [];
     var exportErrors = [];
 
-    var slideDuration = 9.0;  // SMTV slides are always 9 seconds
-    var fadeIn        = 1.0;
+    // SMTV slides are normally 9s, but a short window (e.g. 8-second In/Out)
+    // can shorten the slide. Use the caller-supplied duration when given so
+    // samples land at start/middle/end of the ACTUAL slide window.
+    var slideDuration = (typeof clipDurationSeconds === 'number' && clipDurationSeconds >= 1)
+                        ? clipDurationSeconds : 9.0;
+    var fadeIn        = (slideDuration < 5) ? slideDuration * 0.1 : 1.0;
 
-    // Fixed samples spread across the slide window.
-    // 8.0s is included specifically to catch title text that fades in ~1-2s
-    // after a scene cut — the 6s sample often lands only 0.3s into a new clip
-    // where text is still semi-transparent and unreadable by OCRAD.
-    var sampleOffsets = [
-        fadeIn,                   // 1.0s — after fade-in
-        slideDuration / 2,        // 4.5s — mid-point
-        slideDuration - fadeIn    // 8.0s — near end, catches late-appearing text
-    ];
+    // Sample offsets — the QYM tab uses literal start/middle/end since it
+    // analyses with coco-ssd (no OCRAD text concerns). The Slides tab still
+    // uses the fade-in-aware offsets that OCRAD needs for clean text reads.
+    var sampleOffsets;
+    if (categoryName === 'QYM') {
+        // Start / middle / end of the 9-second slide window.
+        // 8.99 used instead of 9.00 to keep the last sample inside the
+        // intended slide range (avoids landing on the next clip if the
+        // window boundary aligns with a hard cut at +9.00s).
+        sampleOffsets = [0.0, slideDuration / 2, slideDuration - 0.01];
+    } else {
+        // Slides tab — fade-in-aware offsets, tuned for OCRAD text detection.
+        // 8.0s catches title text that fades in ~1–2s after a scene cut where
+        // the 6s sample would land only 0.3s into a new clip.
+        sampleOffsets = [
+            fadeIn,                   // 1.0s — after fade-in
+            slideDuration / 2,        // 4.5s — mid-point
+            slideDuration - fadeIn    // 8.0s — near end, catches late-appearing text
+        ];
+    }
 
     for (var s = 0; s < sampleOffsets.length; s++) {
         var sampleSeconds = startSeconds + sampleOffsets[s];
         sampleTimes.push(sampleSeconds);
-        var exportResult = _exportSequenceFrameAtSeconds(seq, sampleSeconds, _joinPath(analysisDir, fileStemBase + '_sample_' + (s + 1)));
+        // Encode the actual export time (in seconds, 2 decimals) into the
+        // filename so a debug-frame can be matched directly to its sequence
+        // position regardless of timecode display mode (DF / NDF / 25fps).
+        // ExtendScript ES3 has no toFixed — multiply, round, and format manually.
+        var secsHundredths = Math.round(sampleSeconds * 100);
+        var secsInt = Math.floor(secsHundredths / 100);
+        var secsCs  = secsHundredths - secsInt * 100;
+        var pad2 = (secsCs < 10) ? ('0' + secsCs) : ('' + secsCs);
+        var timeLabel = secsInt + 's' + pad2;   // e.g. "560s29" = 560.29 seconds
+        var stem = fileStemBase + '_s' + (s + 1) + '_t' + timeLabel;
+        var exportResult = _exportSequenceFrameAtSeconds(seq, sampleSeconds, _joinPath(analysisDir, stem));
         framePaths.push(exportResult.path || '');
         if (!exportResult.ok && exportResult.error) {
             exportErrors.push('sample ' + (s + 1) + ': ' + exportResult.error);
@@ -490,6 +515,11 @@ function _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, an
 
 var _NPM_LABEL_ENGLISH = 4;
 var _NPM_LABEL_NON_ENGLISH = 8;
+// QYM-specific clip-label colors (Premiere Pro setColorLabel indices).
+// Modern PPro default palette: index 5 = Forest (green), index 15 = Yellow.
+// If your PPro install has customised label colours, adjust these constants.
+var _QYM_LABEL_QUAN_YIN = 15;   // Yellow
+var _QYM_LABEL_SMTV_MAX = 5;    // Forest (green)
 var _NPM_MOTION_PRESETS = {
     'top-right': {
         position: [1795.0, 336.0],
@@ -519,6 +549,14 @@ function _setProjectItemLabel(projectItem, isEnglish) {
     try {
         projectItem.setColorLabel(isEnglish ? _NPM_LABEL_ENGLISH : _NPM_LABEL_NON_ENGLISH);
     } catch (e) {}
+}
+
+// QYM uses TYPE-based colour labels (not English/non-English).
+//   Quan-Yin → yellow,  SMTV Max → green.
+function _setQYMItemLabel(projectItem, slideType) {
+    if (!projectItem || typeof projectItem.setColorLabel !== 'function') return;
+    var color = (slideType === 'quan-yin') ? _QYM_LABEL_QUAN_YIN : _QYM_LABEL_SMTV_MAX;
+    try { projectItem.setColorLabel(color); } catch (e) {}
 }
 
 function _findComponentByMatchName(trackItem, matchName, displayName) {
@@ -745,7 +783,7 @@ function newPeaceMakerPreviewPlacementFrames(payloadJson) {
             var sampleTimes = [];
             var exportErrors = [];
             if (exportFrames) {
-                var sampleExport = _exportPlacementSampleFrames(seq, placement.startSeconds, clipDurationSeconds, analysisDir, _sanitizeFileStem((i + 1) + '_' + placement.categoryName + '_' + placement.language));
+                var sampleExport = _exportPlacementSampleFrames(seq, placement.startSeconds, clipDurationSeconds, analysisDir, _sanitizeFileStem((i + 1) + '_' + placement.categoryName + '_' + placement.language), placement.categoryName);
                 framePaths = sampleExport.framePaths;
                 sampleTimes = sampleExport.sampleTimes;
                 exportErrors = sampleExport.exportErrors;
@@ -816,7 +854,7 @@ function newPeaceMakerPreviewSinglePlacement(payloadJson) {
         }
 
         var seq = app.project.activeSequence;
-        var sampleExport = _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, analysisDir, _sanitizeFileStem((placementIndex + 1) + '_' + categoryName + '_' + language));
+        var sampleExport = _exportPlacementSampleFrames(seq, startSeconds, clipDurationSeconds, analysisDir, _sanitizeFileStem((placementIndex + 1) + '_' + categoryName + '_' + language), categoryName);
         var anyFrameExported = false;
         for (var i = 0; i < sampleExport.framePaths.length; i++) {
             if (sampleExport.framePaths[i]) {
@@ -940,6 +978,232 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
             intervalSeconds: context.intervalSeconds,
             note: placementPlan ? 'All selected clips were placed using panel-resolved safe times on a single video track.' : 'All selected clips were placed on a single video track using one shared interval calculated as used timeline length divided by total selected slides.'
         });
+    } catch (err) {
+        return _npmJson({ ok: false, error: err.toString() });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  QUAN-YIN & SMTV MAX PLACEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Motion presets for QYM PNG slides ──────────────────────────────────────
+// Position = anchor center in 1920×1080 space (top-right corner).
+// Scale derived from reference image: Quan-Yin 488px → ~424px displayed.
+// These are tunable constants — adjust after first test placement.
+var _QYM_MOTION_PRESETS = {
+    'quan-yin': { position: [1688.0, 440.0], scale: 90.0 },
+    'smtv-max': { position: [1688.0, 440.0], scale: 90.0 }
+};
+
+function _applyQYMMotion(trackItem, slideType, seq) {
+    if (!trackItem) return;
+    var preset = _QYM_MOTION_PRESETS[slideType] || _QYM_MOTION_PRESETS['quan-yin'];
+    var motion = _findComponentByMatchName(trackItem, 'ADBE Motion', 'Motion');
+    if (!motion) return;
+    var position = _findComponentProperty(motion, 'ADBE Position', 'Position');
+    var scale    = _findComponentProperty(motion, 'ADBE Scale',    'Scale');
+    _setMotionPosition(position, preset.position, seq);
+    _setComponentPropertyValue(scale, preset.scale);
+}
+
+// Applies a 4-keyframe opacity fade (0→100→100→0).
+// Pattern from Adobe community forum (verified working):
+//   https://community.adobe.com/t5/premiere-pro-discussions/simple-fade-out-fade-in-transitions-with-scripting/m-p/12527394
+//
+//   param.setTimeVarying(true);
+//   param.addKey(seconds);
+//   param.setValueAtKey(seconds, value);
+//
+// Times are RAW NUMBERS (seconds), SEQUENCE-ABSOLUTE (use clip.inPoint.seconds
+// as the base, not 0). Two args to setValueAtKey, no boolean/integer flag.
+function _applyQYMFade(trackItem, fadeDuration, clipDuration) {
+    if (!trackItem || !trackItem.components) return;
+    try {
+        // Find Opacity component → opacity value property
+        var opacityParam = null;
+        for (var ci = 0; ci < trackItem.components.numItems; ci++) {
+            var comp = trackItem.components[ci];
+            if (!comp) continue;
+            if (comp.matchName === 'ADBE Opacity' || comp.matchName === 'AE.ADBE Opacity' ||
+                comp.displayName === 'Opacity') {
+                for (var pi = 0; pi < comp.properties.numItems; pi++) {
+                    var p = comp.properties[pi];
+                    if (!p) continue;
+                    if (p.displayName === 'Opacity' || p.displayName === 'Level' ||
+                        p.matchName === 'ADBE Opacity.0001') {
+                        opacityParam = p; break;
+                    }
+                }
+                if (!opacityParam && comp.properties.numItems > 0) {
+                    opacityParam = comp.properties[0];
+                }
+                break;
+            }
+        }
+        if (!opacityParam) return;
+
+        // Sequence-absolute time of clip start.
+        // Use inPoint if available (matches forum example), else fall back to start.
+        var inSec = 0;
+        try {
+            if (trackItem.inPoint && typeof trackItem.inPoint.seconds === 'number') {
+                inSec = trackItem.inPoint.seconds;
+            } else if (trackItem.start && typeof trackItem.start.seconds === 'number') {
+                inSec = trackItem.start.seconds;
+            }
+        } catch (eIn) {}
+
+        var fade = Math.min(fadeDuration, clipDuration / 2 - 0.05);
+        if (fade <= 0) return;
+
+        var t0 = inSec;                          // 0%
+        var t1 = inSec + fade;                   // 100%
+        var t2 = inSec + clipDuration - fade;    // 100%
+        var t3 = inSec + clipDuration;           // 0%
+
+        try { opacityParam.setTimeVarying(true); } catch (eTV) {}
+
+        // Pass 1: addKey at each time (numbers, not Time objects)
+        try { opacityParam.addKey(t0); } catch (e1) {}
+        try { opacityParam.addKey(t1); } catch (e2) {}
+        try { opacityParam.addKey(t2); } catch (e3) {}
+        try { opacityParam.addKey(t3); } catch (e4) {}
+
+        // Pass 2: setValueAtKey(timeSeconds, value) — two args
+        try { opacityParam.setValueAtKey(t0, 0);   } catch (e5) {}
+        try { opacityParam.setValueAtKey(t1, 100); } catch (e6) {}
+        try { opacityParam.setValueAtKey(t2, 100); } catch (e7) {}
+        try { opacityParam.setValueAtKey(t3, 0);   } catch (e8) {}
+    } catch (e) {}
+}
+
+// ── qymGetSequenceWindow ────────────────────────────────────────────────────
+// Returns the usable window (in/out points or full sequence length).
+function qymGetSequenceWindow(payloadJson) {
+    try {
+        if (!app.project) return _npmJson({ ok: false, error: 'No open project.' });
+        var seq = app.project.activeSequence;
+        if (!seq) return _npmJson({ ok: false, error: 'No active sequence.' });
+
+        var usedLen = _getSequenceMaxEndSeconds(seq);
+        if (usedLen <= 0) usedLen = seq.end ? seq.end.seconds : 0;
+        if (usedLen <= 0) usedLen = 1;
+
+        var win = _getPlacementWindow(seq, usedLen);
+
+        // Scan V1 only for the two named clips that must never be covered:
+        //   • starts with "Slogan"  — the Most Powerful Daily Prayer slogan
+        //   • starts with "AD "     — the AD SMTV NEWEST MAX promo
+        var blockedClipRanges = [];
+        var v1Track = seq.videoTracks[0];
+        if (v1Track) {
+            for (var bc = 0; bc < v1Track.clips.numItems; bc++) {
+                var bClip = v1Track.clips[bc];
+                if (!bClip || !bClip.name) continue;
+                var nm = bClip.name.toUpperCase();
+                var isSlogan = nm.indexOf('SLOGAN') === 0;
+                var isAd     = nm.indexOf('AD ') === 0;
+                if (!isSlogan && !isAd) continue;
+                var cStart = (bClip.start && typeof bClip.start.seconds === 'number') ? bClip.start.seconds : 0;
+                var cEnd   = (bClip.end   && typeof bClip.end.seconds   === 'number') ? bClip.end.seconds   : 0;
+                if (cEnd > cStart) blockedClipRanges.push({ start: cStart, end: cEnd, name: bClip.name });
+            }
+        }
+
+        return _npmJson({ ok: true, windowStart: win.start, windowEnd: win.end, usedTimelineLengthSeconds: usedLen, blockedClipRanges: blockedClipRanges });
+    } catch (err) {
+        return _npmJson({ ok: false, error: err.toString() });
+    }
+}
+
+// ── quanYinMaxImportAndPlace ────────────────────────────────────────────────
+// payload: { slides:[{filePath,type,isEnglish,lang}], placements:[{startSeconds}],
+//            targetTrack, clipDuration, fadeDuration }
+function quanYinMaxImportAndPlace(payloadJson) {
+    try {
+        var payload      = _npmParse(payloadJson);
+        var slides       = payload.slides       || [];
+        var placements   = payload.placements   || [];
+        var targetTrackNumber = parseInt(payload.targetTrack, 10) || 10;
+        var clipDuration = typeof payload.clipDuration === 'number' ? payload.clipDuration : 9;
+        var fadeDuration = typeof payload.fadeDuration === 'number' ? payload.fadeDuration : 0.3;
+
+        if (!app.project)                return _npmJson({ ok: false, error: 'No open project.' });
+        if (!app.project.activeSequence) return _npmJson({ ok: false, error: 'No active sequence.' });
+        if (!slides.length)              return _npmJson({ ok: false, error: 'No slides provided.' });
+
+        var seq       = app.project.activeSequence;
+        var rootItem  = app.project.rootItem;
+
+        // Create bins: 'Quan-Yin & Max' → sub-bins 'Quan-Yin' and 'SMTV Max'
+        var parentBin = _findOrCreateBin(rootItem, 'Quan-Yin & Max');
+        var qyBin     = _findOrCreateBin(parentBin, 'Quan-Yin');
+        var maxBin    = _findOrCreateBin(parentBin, 'SMTV Max');
+
+        // Import all unique file paths
+        var qyFiles  = [];
+        var maxFiles = [];
+        for (var si = 0; si < slides.length; si++) {
+            var _fp = slides[si].filePath;
+            var _inArr = false;
+            if (slides[si].type === 'quan-yin') {
+                _inArr = false;
+                for (var _qi = 0; _qi < qyFiles.length; _qi++) { if (qyFiles[_qi] === _fp) { _inArr = true; break; } }
+                if (!_inArr) qyFiles.push(_fp);
+            } else {
+                _inArr = false;
+                for (var _mi = 0; _mi < maxFiles.length; _mi++) { if (maxFiles[_mi] === _fp) { _inArr = true; break; } }
+                if (!_inArr) maxFiles.push(_fp);
+            }
+        }
+        if (qyFiles.length)  app.project.importFiles(qyFiles,  false, qyBin,  false);
+        if (maxFiles.length) app.project.importFiles(maxFiles, false, maxBin, false);
+
+        // Ensure target track exists
+        var trackIndex = targetTrackNumber - 1;
+        while (seq.videoTracks.numTracks <= trackIndex) { seq.videoTracks.addTrack(); }
+        var destTrack = seq.videoTracks[trackIndex];
+
+        var placedCount = 0;
+
+        for (var j = 0; j < slides.length; j++) {
+            var slide     = slides[j];
+            var placement = placements[j] || {};
+            var startSec  = typeof placement.startSeconds === 'number' ? placement.startSeconds : j * (clipDuration + 0.1);
+
+            var bin = (slide.type === 'quan-yin') ? qyBin : maxBin;
+            var projectItem = _findProjectItemByMediaPath(bin, slide.filePath);
+            if (!projectItem) continue;
+
+            // Label by TYPE: Quan-Yin = yellow, SMTV Max = green
+            _setQYMItemLabel(projectItem, slide.type);
+
+            // Place on timeline
+            var when = new Time();
+            when.seconds = startSec;
+            destTrack.overwriteClip(projectItem, when);
+
+            // Find the inserted clip and extend to desired clip duration
+            var clip = _findTrackItemByStartSeconds(destTrack, startSec);
+            if (clip) {
+                try {
+                    var endT = new Time();
+                    endT.seconds = startSec + clipDuration;
+                    clip.end = endT;
+                } catch (e) {}
+
+                // Apply position + scale
+                _applyQYMMotion(clip, slide.type, seq);
+
+                // Apply crossfade (opacity keyframes)
+                _applyQYMFade(clip, fadeDuration, clipDuration);
+
+                placedCount++;
+            }
+        }
+
+        return _npmJson({ ok: true, placedCount: placedCount });
     } catch (err) {
         return _npmJson({ ok: false, error: err.toString() });
     }

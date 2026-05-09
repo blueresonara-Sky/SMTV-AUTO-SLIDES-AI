@@ -6,85 +6,190 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="wrap">
+  <div class="app-shell">
     <h1>SMTV Auto Slides</h1>
 
-    <div class="field">
-      <label>Selected root folder</label>
-      <div class="row">
-        <input id="folderPath" type="text" readonly placeholder="Choose the root folder that contains your slide files" />
-        <button id="browseBtn">Browse</button>
-      </div>
-      <input id="folderPicker" type="file" webkitdirectory directory multiple hidden />
+    <!-- Visible from page-load until all detection models finish initialising.
+         Set hidden by JS once everything is ready. -->
+    <div id="loadingBanner" class="loading-banner">
+      <div class="loading-spinner"></div>
+      <span id="loadingText">Loading extension &amp; detection models — please wait…</span>
     </div>
 
-    <div class="field">
-      <label for="slideCount">How many slides per category</label>
-      <input id="slideCount" type="number" min="1" value="6" />
+    <!-- ── Tab bar ─────────────────────────────────────── -->
+    <div class="tab-bar">
+      <button id="tabSlidesBtn" class="tab-btn active">Slides</button>
+      <button id="tabQYMBtn"    class="tab-btn">Quan-Yin &amp; Max</button>
     </div>
 
-    <div class="field">
-      <label for="targetTrack">Starting video track</label>
-      <input id="targetTrack" type="number" min="1" value="9" />
-    </div>
+    <!-- ══ TAB 1 — Slides (existing content) ══════════════ -->
+    <div id="panelSlides" class="tab-panel active">
+      <div class="wrap">
 
-    <div class="field">
-      <label class="checkbox">
-        <input id="ignoreV1" type="checkbox" />
-        <span>Avoid placing slides over V1 clips</span>
-      </label>
-    </div>
-
-    <div class="field">
-      <label for="slideAnchor">Slide position</label>
-      <select id="slideAnchor">
-        <option value="top-right">Top Right</option>
-        <option value="top-left">Top Left</option>
-      </select>
-    </div>
-
-    <div class="field">
-      <label class="checkbox">
-        <input id="avoidFaces" type="checkbox" checked />
-        <span>Avoid heads/faces in the visible frame</span>
-      </label>
-    </div>
-
-    <div class="field">
-      <label>Updates</label>
-      <div class="update-grid">
-        <div class="update-meta">
-          <span>Installed</span>
-          <strong id="installedVersion">-</strong>
+        <div class="field">
+          <label>Selected root folder</label>
+          <div class="row">
+            <input id="folderPath" type="text" readonly placeholder="Choose the root folder that contains your slide files" />
+            <button id="browseBtn">Browse</button>
+          </div>
+          <input id="folderPicker" type="file" webkitdirectory directory multiple hidden />
         </div>
-        <div class="update-meta">
-          <span>Latest</span>
-          <strong id="latestVersion">-</strong>
+
+        <div class="field">
+          <label for="slideCount">How many slides per category</label>
+          <input id="slideCount" type="number" min="1" value="6" />
         </div>
-      </div>
-      <button id="installUpdateBtn" type="button" hidden>Update Now</button>
-      <pre id="updateStatus" class="info">No update check yet.</pre>
-    </div>
 
-    <div class="field">
-      <button id="runBtn" class="primary">Import and Place All Categories</button>
-    </div>
+        <div class="field">
+          <label for="targetTrack">Starting video track</label>
+          <input id="targetTrack" type="number" min="1" value="9" />
+        </div>
 
-    <div class="field">
-      <label>Chosen titles</label>
-      <pre id="chosenTitle" class="info">—</pre>
-    </div>
+        <div class="field">
+          <label class="checkbox">
+            <input id="ignoreV1" type="checkbox" />
+            <span>Avoid placing slides over V1 clips</span>
+          </label>
+        </div>
 
-    <div class="field">
-      <label>Chosen languages</label>
-      <pre id="chosenLanguages" class="info">—</pre>
-    </div>
+        <div class="field">
+          <label for="slideAnchor">Slide position</label>
+          <select id="slideAnchor">
+            <option value="top-right">Top Right</option>
+            <option value="top-left">Top Left</option>
+          </select>
+        </div>
 
-    <div class="field">
-      <label>Status</label>
-      <pre id="status">Ready.</pre>
-    </div>
-  </div>
+        <div class="field">
+          <label class="checkbox">
+            <input id="avoidFaces" type="checkbox" checked />
+            <span>Avoid heads/faces in the visible frame</span>
+          </label>
+        </div>
+
+        <div class="field">
+          <label class="checkbox">
+            <input id="packPerCategory" type="checkbox" />
+            <span>Group slides per category (pack tight, gap between groups)</span>
+          </label>
+        </div>
+
+        <div class="field">
+          <label>Updates</label>
+          <div class="update-grid">
+            <div class="update-meta">
+              <span>Installed</span>
+              <strong id="installedVersion">-</strong>
+            </div>
+            <div class="update-meta">
+              <span>Latest</span>
+              <strong id="latestVersion">-</strong>
+            </div>
+          </div>
+          <button id="installUpdateBtn" type="button" hidden>Update Now</button>
+          <pre id="updateStatus" class="info">No update check yet.</pre>
+        </div>
+
+        <div class="field">
+          <button id="runBtn" class="primary">Import and Place All Categories</button>
+        </div>
+
+        <div class="field">
+          <label>Chosen titles</label>
+          <pre id="chosenTitle" class="info">—</pre>
+        </div>
+
+        <div class="field">
+          <label>Chosen languages</label>
+          <pre id="chosenLanguages" class="info">—</pre>
+        </div>
+
+        <div class="field">
+          <label>Status</label>
+          <pre id="status">Ready.</pre>
+        </div>
+
+      </div><!-- /.wrap -->
+    </div><!-- /#panelSlides -->
+
+    <!-- ══ TAB 2 — Quan-Yin & Max ═════════════════════════ -->
+    <div id="panelQYM" class="tab-panel">
+      <div class="wrap">
+
+        <div class="field">
+          <label>Quan-Yin slides folder</label>
+          <div class="row">
+            <input id="qymQYFolder" type="text" readonly placeholder="Choose Quan-Yin slides folder" />
+            <button id="qymQYBrowse">Browse</button>
+          </div>
+          <input id="qymQYPicker" type="file" webkitdirectory directory multiple hidden />
+        </div>
+
+        <div class="field">
+          <label>SMTV Max slides folder</label>
+          <div class="row">
+            <input id="qymMaxFolder" type="text" readonly placeholder="Choose SMTV Max slides folder" />
+            <button id="qymMaxBrowse">Browse</button>
+          </div>
+          <input id="qymMaxPicker" type="file" webkitdirectory directory multiple hidden />
+        </div>
+
+        <div class="field">
+          <label>Slide types to place</label>
+          <div class="radio-group">
+            <label class="radio"><input type="radio" name="qymSlideType" value="both" checked /> <span>Both Quan-Yin and SMTV Max</span></label>
+            <label class="radio"><input type="radio" name="qymSlideType" value="qy-only" /> <span>Quan-Yin only</span></label>
+            <label class="radio"><input type="radio" name="qymSlideType" value="max-only" /> <span>SMTV Max only</span></label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="qymMaxCount">Max slides per type (Quan-Yin &amp; Max separately)</label>
+          <input id="qymMaxCount" type="number" min="1" value="4" />
+        </div>
+
+        <div class="field">
+          <label for="qymTargetTrack">Target video track</label>
+          <input id="qymTargetTrack" type="number" min="1" value="10" />
+        </div>
+
+        <div class="field">
+          <label for="qymFadeDuration">Crossfade duration (seconds)</label>
+          <input id="qymFadeDuration" type="number" min="0.1" step="0.1" value="0.3" />
+        </div>
+
+        <div class="field">
+          <label class="checkbox">
+            <input id="qymAvoidFaces" type="checkbox" checked />
+            <span>Avoid heads/faces in the visible frame</span>
+          </label>
+        </div>
+
+        <!-- Diagnostic frame export — hidden from UI per user request.
+             Uncomment this block to re-enable; all underlying logic
+             (qymKeepDebug setting, ~/qym-debug/ writer) is intact.
+        <div class="field">
+          <label class="checkbox">
+            <input id="qymKeepDebug" type="checkbox" />
+            <span>Keep analyzed frames for debugging (saved to ~/qym-debug/)</span>
+          </label>
+        </div>
+        -->
+
+
+        <div class="field">
+          <button id="qymRunBtn" class="primary">Place Quan-Yin &amp; Max Slides</button>
+        </div>
+
+        <div class="field">
+          <label>Status</label>
+          <pre id="qymStatus">Ready.</pre>
+        </div>
+
+      </div><!-- /.wrap -->
+    </div><!-- /#panelQYM -->
+
+  </div><!-- /.app-shell -->
 
   <div id="updateModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="updateModalTitle">
     <div class="modal-card">
@@ -97,9 +202,24 @@
     </div>
   </div>
 
+  <div id="qymConfirmModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="qymConfirmTitle">
+    <div class="modal-card">
+      <div id="qymConfirmTitle" class="modal-title">No In/Out Points Set</div>
+      <div id="qymConfirmBody" class="modal-body">No In/Out points are set on the active sequence. QYM slides will spread across the whole sequence.
+
+Continue anyway?</div>
+      <div class="modal-actions">
+        <button type="button" id="qymConfirmCancelBtn" class="secondary-btn">Cancel</button>
+        <button type="button" id="qymConfirmOkBtn">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <script src="lib/CSInterface.js"></script>
   <script src="lib/face-api.js"></script>
   <script src="lib/ocrad.js"></script>
+  <script src="lib/tf.min.js"></script>
+  <script src="lib/coco-ssd.min.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
