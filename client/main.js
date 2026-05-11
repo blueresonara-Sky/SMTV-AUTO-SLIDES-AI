@@ -505,6 +505,18 @@
     slideAnchorInput.value = tracking.settings.slideAnchor || 'top-right';
     avoidFacesInput.checked = tracking.settings.avoidFaces !== false;
     if (packPerCategoryInput) packPerCategoryInput.checked = !!tracking.settings.packPerCategory;
+    applyPackModeUiLock();
+  }
+
+  // Pack mode bypasses both V1 and face/head avoidance, so the "Avoid faces"
+  // checkbox is meaningless while pack mode is on. Grey it out so the user
+  // sees that the toggle is overridden, and restore it when pack is off.
+  function applyPackModeUiLock() {
+    if (!avoidFacesInput || !packPerCategoryInput) return;
+    var packOn = !!packPerCategoryInput.checked;
+    avoidFacesInput.disabled = packOn;
+    var label = avoidFacesInput.closest ? avoidFacesInput.closest('.field') : null;
+    if (label && label.classList) label.classList.toggle('disabled', packOn);
   }
 
   function setUpdateStatus(msg) {
@@ -3101,6 +3113,15 @@
       }
     } catch (e) {}
 
+    // Persistent location — survives extension reinstall (the in-extension
+    // flag gets wiped because the updater clears the install dir before
+    // extracting the new zip).
+    try {
+      if (fs.existsSync(path.join(trackingDir, TEST_UPDATE_FLAG_FILE))) {
+        return true;
+      }
+    } catch (eP) {}
+
     try {
       var root = extensionRoot || resolveExtensionRoot();
       return !!(root && fs.existsSync(path.join(root, TEST_UPDATE_FLAG_FILE)));
@@ -3211,9 +3232,32 @@
     });
   }
 
-  function requestJson(url, callback, redirectCount) {
+  // Errors worth retrying — typical CEP-Node + GitHub flakiness.
+  // ECONNRESET surfaces as the message "socket hang up", which the user has
+  // hit repeatedly; the request itself is fine when re-issued.
+  function _isTransientNetworkError(err) {
+    if (!err) return false;
+    var msg = String(err.message || '').toLowerCase();
+    var code = String(err.code || '').toUpperCase();
+    return (
+      msg.indexOf('socket hang up') !== -1 ||
+      msg.indexOf('econnreset') !== -1 ||
+      msg.indexOf('etimedout') !== -1 ||
+      msg.indexOf('eai_again') !== -1 ||
+      code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'EAI_AGAIN' ||
+      code === 'ENOTFOUND' || code === 'ECONNREFUSED'
+    );
+  }
+
+  function _requestJsonOnce(url, redirectCount, callback) {
     var redirects = redirectCount || 0;
-    https.get(url, {
+    var settled = false;
+    var done = function (err, val) {
+      if (settled) return;
+      settled = true;
+      callback(err, val);
+    };
+    var req = https.get(url, {
       headers: {
         'User-Agent': 'SMTV-Slides-Updater',
         'Accept': 'application/vnd.github+json'
@@ -3221,12 +3265,12 @@
     }, function (res) {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
         res.resume();
-        requestJson(res.headers.location, callback, redirects + 1);
+        _requestJsonOnce(res.headers.location, redirects + 1, done);
         return;
       }
       if (res.statusCode !== 200) {
         res.resume();
-        callback(new Error('GitHub update check failed with status ' + res.statusCode + '.'));
+        done(new Error('GitHub update check failed with status ' + res.statusCode + '.'));
         return;
       }
       var body = '';
@@ -3234,14 +3278,43 @@
       res.on('data', function (chunk) { body += chunk; });
       res.on('end', function () {
         try {
-          callback(null, JSON.parse(body));
+          done(null, JSON.parse(body));
         } catch (e) {
-          callback(new Error('Could not parse GitHub release response.'));
+          done(new Error('Could not parse GitHub release response.'));
         }
       });
-    }).on('error', function (err) {
-      callback(err);
+      res.on('error', function (err) { done(err); });
     });
+    // 15s hard timeout — without this CEP Node can hang on a stuck socket
+    // until the user gives up on the panel.
+    req.setTimeout(15000, function () {
+      var e = new Error('Request timed out after 15s');
+      e.code = 'ETIMEDOUT';
+      try { req.destroy(e); } catch (ex) {}
+      done(e);
+    });
+    req.on('error', function (err) { done(err); });
+  }
+
+  function requestJson(url, callback) {
+    // Retry up to 3 times on transient network errors with backoff.
+    // CEP's bundled Node frequently fails the first call after panel load
+    // with "socket hang up" while subsequent calls succeed; retrying makes
+    // the updater self-healing instead of asking the user to reload.
+    var maxAttempts = 3;
+    var backoffs = [0, 700, 1800];
+    var attempt = 0;
+    var run = function () {
+      _requestJsonOnce(url, 0, function (err, val) {
+        if (err && _isTransientNetworkError(err) && attempt + 1 < maxAttempts) {
+          attempt++;
+          setTimeout(run, backoffs[attempt]);
+          return;
+        }
+        callback(err, val);
+      });
+    };
+    run();
   }
 
   function downloadFile(url, destPath, callback, redirectCount) {
@@ -3482,7 +3555,7 @@
 
       showUpdateModal(
         'Install Update',
-        buildUpdateNotesMessage(release, 'Install version ' + latestVersion + ' from ' + updateRepo + ' now?\nPremiere Pro should be restarted after the update.', { popupSummary: true }),
+        buildUpdateNotesMessage(release, 'Install version ' + latestVersion + ' now?\nPremiere Pro should be restarted after the update.', { popupSummary: true }),
         { confirm: true, okText: 'Install', cancelText: 'Cancel' }
       ).then(function (confirmed) {
       if (!confirmed) {
@@ -5731,7 +5804,10 @@
   ignoreV1Input.addEventListener('change', persistSettings);
   slideAnchorInput.addEventListener('change', persistSettings);
   avoidFacesInput.addEventListener('change', persistSettings);
-  if (packPerCategoryInput) packPerCategoryInput.addEventListener('change', persistSettings);
+  if (packPerCategoryInput) packPerCategoryInput.addEventListener('change', function () {
+    applyPackModeUiLock();
+    persistSettings();
+  });
   installUpdateBtn.addEventListener('click', installLatestUpdate);
   window.addEventListener('beforeunload', persistSettings);
 
@@ -5777,6 +5853,14 @@
           return;
         }
 
+        // ── Capacity pre-flight ─────────────────────────────────────────
+        // Each slide is ~9 s. Probe the sequence window (In/Out range or
+        // whole sequence) and warn before burning slides on top of each
+        // other when the requested count won't fit.
+        var SLIDE_DURATION_SECONDS = 9;
+        var numCategoriesForCheck = categoryDataList.length;
+
+        var _doSlidesPlacement = function () {
         log('Ignored folder: AFTERCODECS HAP ALPHA');
         var batches = [];
         var titleSummary = [];
@@ -5831,6 +5915,61 @@
           slideAnchor: slideAnchor,
           avoidFaces: avoidFaces,
           packPerCategory: packPerCategory
+        });
+        };  // end _doSlidesPlacement
+
+        var continueSlidesRun = function () {
+          try {
+            _doSlidesPlacement();
+          } catch (err) {
+            setStatus('Error: ' + err.message);
+            setRunning(false);
+          }
+        };
+
+        callJsx('qymGetSequenceWindow', {}, function (rawWin) {
+          var win = null;
+          try { win = JSON.parse(rawWin); } catch (e) { win = null; }
+
+          // If the probe failed (no project / no sequence / parse error),
+          // skip the warning and let the host surface the real error later.
+          if (!win || !win.ok) {
+            continueSlidesRun();
+            return;
+          }
+
+          var winSecs   = Math.max(0, win.windowEnd - win.windowStart);
+          var usedLen   = win.usedTimelineLengthSeconds || 0;
+          var hasInOut  = (win.windowStart > 0.5) || (win.windowEnd < usedLen - 0.5);
+          var totalSlides = requestedCount * numCategoriesForCheck;
+          var neededSecs  = totalSlides * SLIDE_DURATION_SECONDS;
+
+          if (winSecs > 0 && neededSecs > winSecs) {
+            var maxPerCat = Math.max(0, Math.floor(winSecs / (numCategoriesForCheck * SLIDE_DURATION_SECONDS)));
+            var scopeLabel = hasInOut ? 'Your In/Out range' : 'The whole sequence';
+            var msg = scopeLabel + ' is only ' + Math.round(winSecs) + ' s long.\n' +
+                      'You asked for ' + requestedCount + ' slides × ' + numCategoriesForCheck +
+                      ' categories = ' + totalSlides + ' slides.\n' +
+                      'At ' + SLIDE_DURATION_SECONDS + ' s each, you need ~' + neededSecs +
+                      ' s (' + Math.max(0, neededSecs - Math.round(winSecs)) + ' s too long).\n\n' +
+                      'Recommended max per category: ' + maxPerCat + '.\n\n' +
+                      'If you continue, slides will overlap and burn over each other.';
+            showUpdateModal('Not enough room for ' + requestedCount + ' slides per category', msg, {
+              confirm: true,
+              okText: 'Continue anyway',
+              cancelText: 'Cancel'
+            }).then(function (ok) {
+              if (!ok) {
+                setStatus('Cancelled — reduce the slide count or extend your In/Out range.');
+                setRunning(false);
+                return;
+              }
+              continueSlidesRun();
+            });
+            return;
+          }
+
+          continueSlidesRun();
         });
       } catch (err) {
         setStatus('Error: ' + err.message);

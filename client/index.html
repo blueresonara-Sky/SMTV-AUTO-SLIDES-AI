@@ -16,6 +16,23 @@
       <span id="loadingText">Loading extension &amp; detection models — please wait…</span>
     </div>
 
+    <!-- ── Updates panel (shared across both tabs) ─────── -->
+    <div class="field update-strip">
+      <label>Updates</label>
+      <div class="update-grid">
+        <div class="update-meta">
+          <span>Installed</span>
+          <strong id="installedVersion">-</strong>
+        </div>
+        <div class="update-meta">
+          <span>Latest</span>
+          <strong id="latestVersion">-</strong>
+        </div>
+      </div>
+      <button id="installUpdateBtn" type="button" hidden>Update Now</button>
+      <pre id="updateStatus" class="info">No update check yet.</pre>
+    </div>
+
     <!-- ── Tab bar ─────────────────────────────────────── -->
     <div class="tab-bar">
       <button id="tabSlidesBtn" class="tab-btn active">Slides</button>
@@ -72,22 +89,6 @@
             <input id="packPerCategory" type="checkbox" />
             <span>Group slides per category (pack tight, gap between groups)</span>
           </label>
-        </div>
-
-        <div class="field">
-          <label>Updates</label>
-          <div class="update-grid">
-            <div class="update-meta">
-              <span>Installed</span>
-              <strong id="installedVersion">-</strong>
-            </div>
-            <div class="update-meta">
-              <span>Latest</span>
-              <strong id="latestVersion">-</strong>
-            </div>
-          </div>
-          <button id="installUpdateBtn" type="button" hidden>Update Now</button>
-          <pre id="updateStatus" class="info">No update check yet.</pre>
         </div>
 
         <div class="field">
