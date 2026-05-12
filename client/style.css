@@ -205,23 +205,13 @@ button:hover {
   display: none;
 }
 
-/* While models are loading, fade out everything else in the app shell so
-   it's obvious the panel isn't ready for input yet. The banner itself is
-   excluded so it stays bright and readable. */
-.app-shell.models-loading > *:not(.loading-banner) {
-  opacity: 0.35;
-  filter: grayscale(50%);
-  pointer-events: none;
-  transition: opacity 0.3s ease, filter 0.3s ease;
-  user-select: none;
-}
-.app-shell.models-loading > h1 {
-  /* Keep the title slightly visible — it's just a label, no interaction. */
-  opacity: 0.5;
-}
-.app-shell:not(.models-loading) > * {
-  transition: opacity 0.3s ease, filter 0.3s ease;
-}
+/* While detection models are loading, the loading banner is the only signal
+   the user needs — every other field (folder pickers, track number, fade
+   duration, slide type, etc.) stays fully interactive so the user can keep
+   configuring while the model downloads in the background. Only the Run
+   buttons are disabled, via JS (`_updateRunButtonsForLoading`).
+   Previously the whole panel was grayed out + pointer-events disabled,
+   which made the panel feel frozen — that's gone now. */
 .loading-spinner {
   width: 22px;
   height: 22px;

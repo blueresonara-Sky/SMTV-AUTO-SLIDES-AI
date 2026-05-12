@@ -4,6 +4,25 @@
   <meta charset="UTF-8" />
   <title>SMTV Auto Slides</title>
   <link rel="stylesheet" href="style.css" />
+  <!-- Match the panel background to body's CSS so CEF doesn't paint the
+       WebView area pure black before style.css applies. -->
+  <style>html, body { background: #1e1e1e; }</style>
+
+  <!-- Scripts are deferred and loaded from <head> so the browser can fetch
+       all of them in parallel while it parses the body. Execution order is
+       preserved (tf.min.js before coco-ssd.min.js, main.js last), but the
+       HTML keeps painting in the meantime — no more multi-second black
+       screen before the loading banner appears.
+
+       face-api.js (1.3 MB) + ocrad.js (1.16 MB) + tf.min.js (1.47 MB) used
+       to load sequentially at end-of-body. That was the main cause of the
+       "black panel for a few seconds" on startup. -->
+  <script src="lib/CSInterface.js"   defer></script>
+  <script src="lib/face-api.js"      defer></script>
+  <script src="lib/ocrad.js"         defer></script>
+  <script src="lib/tf.min.js"        defer></script>
+  <script src="lib/coco-ssd.min.js"  defer></script>
+  <script src="main.js"              defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -216,11 +235,8 @@ Continue anyway?</div>
     </div>
   </div>
 
-  <script src="lib/CSInterface.js"></script>
-  <script src="lib/face-api.js"></script>
-  <script src="lib/ocrad.js"></script>
-  <script src="lib/tf.min.js"></script>
-  <script src="lib/coco-ssd.min.js"></script>
-  <script src="main.js"></script>
+  <!-- Scripts are now loaded with `defer` from <head> so the panel can
+       paint the loading banner immediately instead of staying black while
+       ~4 MB of detection libraries serialise through the script parser. -->
 </body>
 </html>

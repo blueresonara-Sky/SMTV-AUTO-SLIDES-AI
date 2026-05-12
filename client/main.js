@@ -118,6 +118,14 @@
     cocoSsd:  'loading',
     ocrad:    'loading'
   };
+  // Friendlier names for the banner text. The internal model keys are kept
+  // technical (faceApi/cocoSsd/ocrad) but users shouldn't have to read those.
+  var _modelDisplayNames = {
+    faceApi: 'face detection (Slides tab)',
+    cocoSsd: 'person detection (Quan-Yin & Max tab)',
+    ocrad:   'text detection (Quan-Yin & Max tab)'
+  };
+
   function _updateLoadingBanner() {
     if (!loadingBannerEl) {
       loadingBannerEl = document.getElementById('loadingBanner');
@@ -125,30 +133,120 @@
     }
     if (!loadingBannerEl || !loadingTextEl) return;
     var appShell = document.querySelector('.app-shell');
+    var spin = loadingBannerEl.querySelector('.loading-spinner');
 
     var stillLoading = [];
-    if (modelLoadState.faceApi === 'loading') stillLoading.push('face-api (Slides tab)');
-    if (modelLoadState.cocoSsd === 'loading') stillLoading.push('coco-ssd (QYM tab)');
-    if (modelLoadState.ocrad   === 'loading') stillLoading.push('OCRAD');
+    if (modelLoadState.faceApi === 'loading') stillLoading.push(_modelDisplayNames.faceApi);
+    if (modelLoadState.cocoSsd === 'loading') stillLoading.push(_modelDisplayNames.cocoSsd);
+    if (modelLoadState.ocrad   === 'loading') stillLoading.push(_modelDisplayNames.ocrad);
+
     if (stillLoading.length === 0) {
-      // Everything done — hide banner and un-fade the rest of the panel.
-      loadingTextEl.textContent = 'All detection models ready.';
-      loadingBannerEl.style.background = '#1f4f31';
-      loadingBannerEl.style.borderColor = '#3d8e57';
-      loadingBannerEl.style.color = '#ffffff';
-      var spin = loadingBannerEl.querySelector('.loading-spinner');
-      if (spin) spin.style.display = 'none';
-      // Remove the fade class so the panel becomes fully interactive.
+      // Distinguish "we just finished loading models" from "nothing ever
+      // loaded" (all three still 'skipped' from startup). Under the
+      // deferred-load policy nothing loads on boot, so the green
+      // "All detection models ready" confirmation pops on then off for no
+      // reason — hide the banner silently in that case.
+      var anyLoaded = (modelLoadState.faceApi === 'ready' || modelLoadState.faceApi === 'failed'
+                    || modelLoadState.cocoSsd === 'ready' || modelLoadState.cocoSsd === 'failed'
+                    || modelLoadState.ocrad   === 'ready' || modelLoadState.ocrad   === 'failed');
       if (appShell) appShell.classList.remove('models-loading');
-      setTimeout(function () { loadingBannerEl.classList.add('hidden'); }, 1200);
+      if (anyLoaded) {
+        // Real "we just finished loading" moment — show the green flash,
+        // then hide.
+        loadingTextEl.textContent = 'All detection models ready.';
+        loadingBannerEl.style.background = '#1f4f31';
+        loadingBannerEl.style.borderColor = '#3d8e57';
+        loadingBannerEl.style.color = '#ffffff';
+        if (spin) spin.style.display = 'none';
+        setTimeout(function () { loadingBannerEl.classList.add('hidden'); }, 1200);
+      } else {
+        // All-skipped state (typical at panel startup with deferred loading).
+        // Just hide the banner immediately, no flash.
+        loadingBannerEl.classList.add('hidden');
+      }
     } else {
-      loadingTextEl.textContent = 'Loading detection models — please wait… (' + stillLoading.join(', ') + ')';
+      // Re-show + reset the banner in case it was previously hidden / styled
+      // green after a successful first load. Without this the user just sees
+      // the panel grey out with no explanation when they toggle an avoidance
+      // checkbox on later.
+      loadingBannerEl.classList.remove('hidden');
+      loadingBannerEl.style.background = '';     // back to CSS default (blue)
+      loadingBannerEl.style.borderColor = '';
+      loadingBannerEl.style.color = '';
+      if (spin) spin.style.display = '';          // spinner visible again
+      loadingTextEl.textContent = 'Loading ' + stillLoading.join(' + ') + '… please wait. The Run button will re-enable when it\'s done.';
       // Make sure the fade class is on while we're still loading.
       if (appShell) appShell.classList.add('models-loading');
     }
   }
-  function _markModelReady(name)  { modelLoadState[name] = 'ready';  _updateLoadingBanner(); _updateRunButtonsForLoading(); }
-  function _markModelFailed(name) { modelLoadState[name] = 'failed'; _updateLoadingBanner(); _updateRunButtonsForLoading(); }
+  // Waiters: promises that resolve when a model's load settles. We resolve
+  // them inside _markModelReady / _markModelFailed / _markModelSkipped so any
+  // code path that's awaiting a model gets notified the instant init returns.
+  var _modelLoadWaiters = { faceApi: [], cocoSsd: [], ocrad: [] };
+  function _resolveModelWaiters(name) {
+    if (!_modelLoadWaiters[name]) return;
+    var ws = _modelLoadWaiters[name];
+    _modelLoadWaiters[name] = [];
+    for (var i = 0; i < ws.length; i++) {
+      try { ws[i](modelLoadState[name]); } catch (e) {}
+    }
+  }
+  function _markModelReady(name)   { modelLoadState[name] = 'ready';   _updateLoadingBanner(); _updateRunButtonsForLoading(); _resolveModelWaiters(name); }
+  function _markModelFailed(name)  { modelLoadState[name] = 'failed';  _updateLoadingBanner(); _updateRunButtonsForLoading(); _resolveModelWaiters(name); }
+  function _markModelSkipped(name) { modelLoadState[name] = 'skipped'; _updateLoadingBanner(); _updateRunButtonsForLoading(); _resolveModelWaiters(name); }
+
+  // Promise-returning loaders. Used by the Run-button click paths to make
+  // sure the detection model is ready BEFORE the placement work begins, so
+  // toggling avoidance checkboxes never freezes the panel — the freeze
+  // only happens during the explicit Run step where waiting is expected.
+  //
+  // If the model is already 'ready' or 'failed', resolves immediately.
+  // If a load is already in flight ('loading'), queues onto its waiters.
+  // Otherwise kicks off the underlying init() and queues.
+  // IMPORTANT: push the resolver onto the waiter list BEFORE calling init().
+  // initOCRAD is fully synchronous and initFaceApi/initCocoSsd both have
+  // synchronous failure paths (e.g. "library not loaded" → _markModelFailed
+  // fires inside the init call). If we push after init, those synchronous
+  // resolutions land on an empty waiter list and the Promise never resolves.
+  function loadFaceApiIfNeeded() {
+    return new Promise(function (resolve) {
+      var state = modelLoadState.faceApi;
+      if (state === 'ready' || state === 'failed') { resolve(state); return; }
+      var needInit = (state !== 'loading');
+      _modelLoadWaiters.faceApi.push(resolve);
+      if (needInit) {
+        modelLoadState.faceApi = 'loading';
+        _updateLoadingBanner(); _updateRunButtonsForLoading();
+        initFaceApi();
+      }
+    });
+  }
+  function loadCocoSsdIfNeeded() {
+    return new Promise(function (resolve) {
+      var state = modelLoadState.cocoSsd;
+      if (state === 'ready' || state === 'failed') { resolve(state); return; }
+      var needInit = (state !== 'loading');
+      _modelLoadWaiters.cocoSsd.push(resolve);
+      if (needInit) {
+        modelLoadState.cocoSsd = 'loading';
+        _updateLoadingBanner(); _updateRunButtonsForLoading();
+        initCocoSsd();
+      }
+    });
+  }
+  function loadOcradIfNeeded() {
+    return new Promise(function (resolve) {
+      var state = modelLoadState.ocrad;
+      if (state === 'ready' || state === 'failed') { resolve(state); return; }
+      var needInit = (state !== 'loading');
+      _modelLoadWaiters.ocrad.push(resolve);
+      if (needInit) {
+        modelLoadState.ocrad = 'loading';
+        _updateLoadingBanner(); _updateRunButtonsForLoading();
+        initOCRAD();
+      }
+    });
+  }
   function _updateRunButtonsForLoading() {
     // Disable BOTH run buttons until at least the relevant detector for each
     // tab is settled (ready or failed). Prevents a click landing on coco-ssd
@@ -5760,8 +5858,64 @@
   }
 
   // ── QYM run button ───────────────────────────────────────────────────────
+  // Wrapped to defer model loading: if QYM "Avoid heads/faces" is on and
+  // the coco-ssd / OCRAD models aren't ready yet, load them BEFORE calling
+  // runQuanYinAndMax. The wrapper does NOT modify the QYM run logic — it
+  // just guarantees the models are ready by the time runQuanYinAndMax
+  // starts, exactly as if they had been eager-loaded at panel startup.
   if (qymRunBtn) {
-    qymRunBtn.addEventListener('click', function () { runQuanYinAndMax(); });
+    qymRunBtn.addEventListener('click', function () {
+      if (qymRunning) return;
+
+      // ── Pre-flight checks BEFORE any heavy work ─────────────────────────
+      // Premiere's ExtendScript API can't create video tracks, so verify
+      // the user's chosen track exists. Bail out FAST (before models load,
+      // before frame analysis) so the user sees the issue immediately.
+      var requestedTrack = parseInt(qymTargetTrackInput.value, 10) || 10;
+      callJsx('qymGetSequenceWindow', {}, function (rawWin) {
+        var win = null;
+        try { win = JSON.parse(rawWin); } catch (e) { win = null; }
+        if (win && win.ok) {
+          var numV = win.numVideoTracks || 0;
+          if (numV > 0 && requestedTrack > numV) {
+            var missing = requestedTrack - numV;
+            setQymStatus('Cancelled — video track V' + requestedTrack + ' doesn\'t exist. The sequence has ' + numV + ' video track' + (numV === 1 ? '' : 's') + '. Add ' + missing + ' more in Premiere (right-click the V' + numV + ' track header → "Add Track…"), then click Run again.');
+            return;
+          }
+        }
+        // (If the probe failed — no project / no sequence — let
+        // runQuanYinAndMax surface the real error itself.)
+
+        // ── Pre-flight passed. Continue with model loading + run. ─────────
+        var avoid      = !!(qymAvoidFacesInput && qymAvoidFacesInput.checked);
+        var needPerson = avoid && modelLoadState.cocoSsd !== 'ready' && modelLoadState.cocoSsd !== 'failed';
+        var needText   = avoid && modelLoadState.ocrad   !== 'ready' && modelLoadState.ocrad   !== 'failed';
+
+        if (!needPerson && !needText) {
+          runQuanYinAndMax();
+          return;
+        }
+
+        // Lock the button visibly while we wait for the model — but DO NOT
+        // set qymRunning, because runQuanYinAndMax() guards on it and would
+        // early-return. We give the button back to runQuanYinAndMax which
+        // re-locks via setQymRunning() the moment we hand off.
+        if (qymRunBtnDefaultLabel === null) qymRunBtnDefaultLabel = qymRunBtn.innerHTML;
+        qymRunBtn.disabled  = true;
+        qymRunBtn.innerHTML = 'Loading models…';
+        setQymStatus('Loading detection models before placement. The panel may briefly freeze while TensorFlow.js uploads model weights — this is normal and only happens the first time you run with avoidance on.');
+
+        var loads = [];
+        if (needPerson) loads.push(loadCocoSsdIfNeeded());
+        if (needText)   loads.push(loadOcradIfNeeded());
+
+        Promise.all(loads).then(function () {
+          qymRunBtn.disabled  = false;
+          qymRunBtn.innerHTML = qymRunBtnDefaultLabel;
+          runQuanYinAndMax();
+        });
+      });
+    });
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -5804,6 +5958,12 @@
   ignoreV1Input.addEventListener('change', persistSettings);
   slideAnchorInput.addEventListener('change', persistSettings);
   avoidFacesInput.addEventListener('change', persistSettings);
+  // NOTE: Toggling an "Avoid heads/faces" checkbox now ONLY persists the
+  // setting. It does NOT trigger model loading — that's deferred to the
+  // moment the user clicks Run. This keeps the panel fully responsive
+  // while editing settings; the unavoidable JS-thread freeze from TF.js
+  // weight upload only happens during placement, when waiting is already
+  // the expected user experience.
   if (packPerCategoryInput) packPerCategoryInput.addEventListener('change', function () {
     applyPackModeUiLock();
     persistSettings();
@@ -5919,11 +6079,23 @@
         };  // end _doSlidesPlacement
 
         var continueSlidesRun = function () {
-          try {
-            _doSlidesPlacement();
-          } catch (err) {
-            setStatus('Error: ' + err.message);
-            setRunning(false);
+          // If face avoidance is on and the model isn't ready yet, load it
+          // now (the freeze happens here, during the explicit Run step where
+          // the user is already waiting). Then go ahead with placement.
+          var _afterModel = function () {
+            try {
+              _doSlidesPlacement();
+            } catch (err) {
+              setStatus('Error: ' + err.message);
+              setRunning(false);
+            }
+          };
+          var s = modelLoadState.faceApi;
+          if (avoidFaces && s !== 'ready' && s !== 'failed') {
+            setStatus('Loading face-detection model before placement. The panel may briefly freeze — this is normal, it only happens the first time you run with avoidance on.');
+            loadFaceApiIfNeeded().then(_afterModel);
+          } else {
+            _afterModel();
           }
         };
 
@@ -5935,6 +6107,20 @@
           // skip the warning and let the host surface the real error later.
           if (!win || !win.ok) {
             continueSlidesRun();
+            return;
+          }
+
+          // ── Track-count pre-flight ──────────────────────────────────────
+          // Premiere's ExtendScript API can't create tracks. If the user
+          // chose a track number higher than what exists, fail FAST here
+          // (before any model loading / frame analysis) so they see the
+          // problem immediately and don't wait through a long pipeline
+          // just to hear "track doesn't exist".
+          var numV = win.numVideoTracks || 0;
+          if (numV > 0 && targetTrack > numV) {
+            var missing = targetTrack - numV;
+            setStatus('Cancelled — video track V' + targetTrack + ' doesn\'t exist. The sequence has ' + numV + ' video track' + (numV === 1 ? '' : 's') + '. Add ' + missing + ' more in Premiere (right-click the V' + numV + ' track header → "Add Track…"), then click Run again.');
+            setRunning(false);
             return;
           }
 
@@ -5982,14 +6168,20 @@
   manifestPath = extensionRoot ? path.join(extensionRoot, 'CSXS', 'manifest.xml') : path.join(path.resolve(__dirname, '..'), 'CSXS', 'manifest.xml');
   restoreSettings();
   restoreQYMSettings();
-  // Show the loading banner immediately so the user knows the panel is alive
-  // while the (large) detection models initialise. Each init function calls
-  // _markModelReady / _markModelFailed; the banner hides when all settle.
+  // Deferred-load policy: detection models are NEVER loaded at panel startup
+  // and NEVER on a checkbox toggle. They only load when the user clicks the
+  // relevant Run button (and only if that tab's "Avoid heads/faces" toggle
+  // is on). This keeps the panel fully responsive while configuring —
+  // the unavoidable JS-thread freeze from TF.js weight upload only happens
+  // during placement, where waiting is expected.
+  //
+  // Each model starts marked 'skipped' so the loading banner never appears
+  // on startup and the Run buttons are immediately enabled.
+  modelLoadState.faceApi = 'skipped';
+  modelLoadState.cocoSsd = 'skipped';
+  modelLoadState.ocrad   = 'skipped';
   _updateLoadingBanner();
   _updateRunButtonsForLoading();
-  initFaceApi();    // Load TinyFaceDetector model (async — Slides tab uses this)
-  initCocoSsd();    // Load COCO-SSD model (async — QYM tab uses this for person detection)
-  initOCRAD();      // Load OCRAD.js OCR — synchronous, no Workers, no SharedArrayBuffer
   updateState.installedVersion = readManifestVersion(manifestPath) || '';
   updateState.latestVersion = loadTracking().settings.lastAvailableVersion || '';
   var updateInstallStatus = loadUpdateInstallStatus();

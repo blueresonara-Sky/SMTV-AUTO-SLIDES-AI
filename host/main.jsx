@@ -926,8 +926,20 @@ function newPeaceMakerImportAndPlaceMulti(payloadJson) {
         var resolvedTrackNumber = context.resolvedTrackNumber;
 
         var trackIndex = resolvedTrackNumber - 1;
-        while (seq.videoTracks.numTracks <= trackIndex) {
-            seq.videoTracks.addTrack();
+        // Premiere's ExtendScript API does not expose a way to add tracks
+        // programmatically (no seq.videoTracks.addTrack()). If the user
+        // chose a track number higher than the sequence has, bail out with
+        // a clear instruction instead of crashing with ReferenceError.
+        if (seq.videoTracks.numTracks <= trackIndex) {
+            return _npmJson({
+                ok: false,
+                error: 'Target video track V' + resolvedTrackNumber +
+                       ' does not exist in this sequence (it has only ' + seq.videoTracks.numTracks +
+                       ' video track' + (seq.videoTracks.numTracks === 1 ? '' : 's') + ').' +
+                       ' Add the extra video track' + (trackIndex - seq.videoTracks.numTracks + 1 > 1 ? 's' : '') +
+                       ' to the sequence in Premiere (right-click the V' + seq.videoTracks.numTracks +
+                       ' track header → "Add Track…") and try again.'
+            });
         }
         var destTrack = seq.videoTracks[trackIndex];
 
@@ -1111,7 +1123,14 @@ function qymGetSequenceWindow(payloadJson) {
             }
         }
 
-        return _npmJson({ ok: true, windowStart: win.start, windowEnd: win.end, usedTimelineLengthSeconds: usedLen, blockedClipRanges: blockedClipRanges });
+        return _npmJson({
+            ok: true,
+            windowStart: win.start,
+            windowEnd: win.end,
+            usedTimelineLengthSeconds: usedLen,
+            blockedClipRanges: blockedClipRanges,
+            numVideoTracks: (seq.videoTracks ? seq.videoTracks.numTracks : 0)
+        });
     } catch (err) {
         return _npmJson({ ok: false, error: err.toString() });
     }
@@ -1160,9 +1179,22 @@ function quanYinMaxImportAndPlace(payloadJson) {
         if (qyFiles.length)  app.project.importFiles(qyFiles,  false, qyBin,  false);
         if (maxFiles.length) app.project.importFiles(maxFiles, false, maxBin, false);
 
-        // Ensure target track exists
+        // Ensure target track exists. Premiere's ExtendScript API has no
+        // method to add tracks programmatically (seq.videoTracks.addTrack()
+        // doesn't exist — calling it crashes with ReferenceError). Return a
+        // clear instruction instead.
         var trackIndex = targetTrackNumber - 1;
-        while (seq.videoTracks.numTracks <= trackIndex) { seq.videoTracks.addTrack(); }
+        if (seq.videoTracks.numTracks <= trackIndex) {
+            return _npmJson({
+                ok: false,
+                error: 'Target video track V' + targetTrackNumber +
+                       ' does not exist in this sequence (it has only ' + seq.videoTracks.numTracks +
+                       ' video track' + (seq.videoTracks.numTracks === 1 ? '' : 's') + ').' +
+                       ' Add the extra video track' + (trackIndex - seq.videoTracks.numTracks + 1 > 1 ? 's' : '') +
+                       ' to the sequence in Premiere (right-click the V' + seq.videoTracks.numTracks +
+                       ' track header → "Add Track…") and try again.'
+            });
+        }
         var destTrack = seq.videoTracks[trackIndex];
 
         var placedCount = 0;
