@@ -101,7 +101,14 @@
     latestVersion: '',
     latestRelease: null,
     checking: false,
-    installing: false
+    installing: false,
+    // ── Mandatory-update NAG (no lock) ──
+    // When a newer version is confirmed available, auto-pop a big modal so
+    // the user can't miss it. The panel stays fully usable; the modal is
+    // dismissable. updateAlertShown gates the auto-pop to once per session
+    // so it doesn't reopen every time evaluateUpdateAlert runs.
+    lastCheckFailed: false,
+    updateAlertShown: false
   };
 
   // Neural face-detection state (face-api.js / TinyFaceDetector)
@@ -355,6 +362,12 @@
 
   function setStatus(msg) {
     statusEl.textContent = msg;
+    if (statusEl.classList) statusEl.classList.remove('is-error');
+  }
+
+  function setStatusError(msg) {
+    statusEl.textContent = '⛔ ' + msg;
+    if (statusEl.classList) statusEl.classList.add('is-error');
   }
 
   function shuffle(arr) {
@@ -525,7 +538,13 @@
 
   function setModalOpen(isOpen) {
     if (!updateModalEl) return;
-    updateModalEl.className = isOpen ? 'modal-backdrop is-open' : 'modal-backdrop';
+    // Toggle is-open only; preserve any variant classes (e.g. 'update-alert'
+    // added by showUpdateRequiredModal for the big-green alert styling).
+    if (isOpen) {
+      updateModalEl.classList.add('is-open');
+    } else {
+      updateModalEl.classList.remove('is-open');
+    }
   }
 
   function showUpdateModal(title, message, options) {
@@ -643,6 +662,67 @@
     if (installUpdateBtn.classList) {
       installUpdateBtn.classList.toggle('update-available', hasUpdate);
     }
+  }
+
+  // ── Mandatory-update NAG ────────────────────────────────────────────────
+  // When a newer version is confirmed available, auto-pop a prominent modal
+  // so the user can't miss it. The panel stays FULLY USABLE — this is a nag,
+  // not a lock. The modal is dismissable. We show it at most once per panel
+  // session so the user doesn't have to dismiss it every time something
+  // re-evaluates state.
+  //
+  // Auto-suppress: if the live check fails (offline / GitHub unreachable),
+  // we don't nag — we only auto-pop when we've actually confirmed a newer
+  // version exists. Stale cache alone doesn't trigger the nag.
+
+  function evaluateUpdateAlert() {
+    var installed = updateState.installedVersion;
+    var latest    = updateState.latestVersion;
+    if (!installed || !latest) return;
+    if (compareVersions(latest, installed) <= 0) return;
+    // Newer version exists. Only nag if the live check actually succeeded
+    // AND we have a downloadable release in hand AND we haven't already
+    // nagged this session.
+    if (updateState.lastCheckFailed) return;
+    if (!updateState.latestRelease)  return;
+    if (updateState.updateAlertShown) return;
+
+    updateState.updateAlertShown = true;
+    setTimeout(showUpdateRequiredModal, 0);
+  }
+
+  function showUpdateRequiredModal() {
+    var release = updateState.latestRelease;
+    var ver     = updateState.latestVersion || '?';
+    var heading = 'A new version (' + ver + ') is available. Please update to get the latest fixes and improvements.';
+    var body;
+    if (release) {
+      body = buildUpdateNotesMessage(release, heading, { popupSummary: true });
+    } else {
+      body = heading;
+    }
+    // Tag the modal so the bigger / greener "update-alert" styles in
+    // style.css apply only to this variant, not to other modals (capacity
+    // warning, install-confirm, etc.) that share the same DOM.
+    if (updateModalEl && updateModalEl.classList) {
+      updateModalEl.classList.add('update-alert');
+    }
+    showUpdateModal('Update available', body, {
+      confirm: true,
+      okText: 'Update Now',
+      cancelText: 'Later'
+    }).then(function (confirmed) {
+      if (updateModalEl && updateModalEl.classList) {
+        updateModalEl.classList.remove('update-alert');
+      }
+      if (confirmed) {
+        // Bypass installLatestUpdate's own confirmation modal — user already
+        // chose Update Now in the alert modal.
+        _performUpdateInstall();
+      }
+      // If dismissed, panel stays fully usable. User can reopen the install
+      // flow anytime via the Update Now button in the Updates strip.
+    });
   }
 
   function readManifestVersion(filePath) {
@@ -3612,8 +3692,12 @@
       if (err) {
         updateState.latestRelease = null;
         updateState.latestVersion = '';
+        // Mark check as failed → evaluateUpdateAlert suppresses the nag
+        // (we don't bother the user about updates we couldn't confirm).
+        updateState.lastCheckFailed = true;
         setUpdateStatus('Update check failed: ' + err.message);
         setUpdateUiState();
+        evaluateUpdateAlert();
         return;
       }
 
@@ -3622,6 +3706,8 @@
         var allowTestReinstall = isLocalPrereleaseReinstallAvailable(release);
         updateState.latestVersion = latestVersion || '';
         updateState.latestRelease = zipAsset ? release : null;
+        // Live check succeeded — clear the failure flag.
+        updateState.lastCheckFailed = false;
         persistUpdateInfo(latestVersion);
 
         if (!zipAsset) {
@@ -3634,6 +3720,7 @@
           setUpdateStatus('You are up to date.');
         }
       setUpdateUiState();
+      evaluateUpdateAlert();
     });
   }
 
@@ -3651,14 +3738,31 @@
       return;
     }
 
-      showUpdateModal(
-        'Install Update',
-        buildUpdateNotesMessage(release, 'Install version ' + latestVersion + ' now?\nPremiere Pro should be restarted after the update.', { popupSummary: true }),
-        { confirm: true, okText: 'Install', cancelText: 'Cancel' }
-      ).then(function (confirmed) {
-      if (!confirmed) {
-        return;
-      }
+    showUpdateModal(
+      'Install Update',
+      buildUpdateNotesMessage(release, 'Install version ' + latestVersion + ' now?\nPremiere Pro should be restarted after the update.', { popupSummary: true }),
+      { confirm: true, okText: 'Install', cancelText: 'Cancel' }
+    ).then(function (confirmed) {
+      if (!confirmed) return;
+      _performUpdateInstall();
+    });
+  }
+
+  // Actual install pipeline, extracted so the mandatory-update lock modal
+  // can call it directly without showing a redundant second confirmation.
+  function _performUpdateInstall() {
+    if (!updateRepo) {
+      setUpdateStatus('No GitHub update source is configured.');
+      return;
+    }
+    var release = updateState.latestRelease;
+    var latestVersion = updateState.latestVersion;
+    var zipAsset = getReleaseZipAsset(release);
+    if (!release || !zipAsset) {
+      setUpdateStatus('No downloadable update is ready yet. Restart the extension or wait for the startup check to finish.');
+      return;
+    }
+    (function () {
 
       updateState.installing = true;
       setUpdateStatus('Downloading update...');
@@ -3726,7 +3830,7 @@
           setUpdateUiState();
         }
       });
-    });
+    })();
   }
 
   function escapeForEval(str) {
@@ -4682,7 +4786,37 @@
     qymStatusEl.scrollTop = qymStatusEl.scrollHeight;
   }
   function setQymStatus(msg) {
-    if (qymStatusEl) qymStatusEl.textContent = msg;
+    if (!qymStatusEl) return;
+    qymStatusEl.textContent = msg;
+    if (qymStatusEl.classList) qymStatusEl.classList.remove('is-error');
+  }
+  function setQymStatusError(msg) {
+    if (!qymStatusEl) return;
+    qymStatusEl.textContent = '⛔ ' + msg;
+    if (qymStatusEl.classList) qymStatusEl.classList.add('is-error');
+  }
+
+  // Pop a red modal + paint the matching status box red. Use for pre-flight
+  // cancellations that block placement entirely (track doesn't exist, target
+  // track not empty). The modal makes sure the user can't miss it even if
+  // they aren't looking at the status area when they click Run.
+  function showPreflightError(tab, message) {
+    if (tab === 'qym') {
+      setQymStatusError(message);
+    } else {
+      setStatusError(message);
+    }
+    if (updateModalEl && updateModalEl.classList) {
+      updateModalEl.classList.add('error-alert');
+    }
+    showUpdateModal('Cannot run', message, {
+      confirm: false,
+      okText: 'OK'
+    }).then(function () {
+      if (updateModalEl && updateModalEl.classList) {
+        updateModalEl.classList.remove('error-alert');
+      }
+    });
   }
   // Original button label so we can restore it when the run finishes.
   var qymRunBtnDefaultLabel = null;
@@ -5868,18 +6002,29 @@
       if (qymRunning) return;
 
       // ── Pre-flight checks BEFORE any heavy work ─────────────────────────
-      // Premiere's ExtendScript API can't create video tracks, so verify
-      // the user's chosen track exists. Bail out FAST (before models load,
-      // before frame analysis) so the user sees the issue immediately.
+      // 1) Premiere's ExtendScript API can't create video tracks, so verify
+      //    the user's chosen track exists.
+      // 2) Don't burn QYM slides on top of existing clips — if the target
+      //    track already has any clip overlapping the placement range
+      //    (In/Out if set, otherwise the full sequence), cancel here.
+      // Bail out FAST (before models load, before frame analysis) so the
+      // user sees the issue immediately.
       var requestedTrack = parseInt(qymTargetTrackInput.value, 10) || 10;
-      callJsx('qymGetSequenceWindow', {}, function (rawWin) {
+      callJsx('qymGetSequenceWindow', { targetTrack: requestedTrack }, function (rawWin) {
         var win = null;
         try { win = JSON.parse(rawWin); } catch (e) { win = null; }
         if (win && win.ok) {
           var numV = win.numVideoTracks || 0;
           if (numV > 0 && requestedTrack > numV) {
             var missing = requestedTrack - numV;
-            setQymStatus('Cancelled — video track V' + requestedTrack + ' doesn\'t exist. The sequence has ' + numV + ' video track' + (numV === 1 ? '' : 's') + '. Add ' + missing + ' more in Premiere (right-click the V' + numV + ' track header → "Add Track…"), then click Run again.');
+            showPreflightError('qym', 'Video track V' + requestedTrack + ' doesn\'t exist. The sequence has ' + numV + ' video track' + (numV === 1 ? '' : 's') + '. Add ' + missing + ' more in Premiere (right-click the V' + numV + ' track header → "Add Track…"), then click Run again.');
+            return;
+          }
+          // Target-track-empty pre-flight (mirrors the Slides tab check).
+          var qymTargetClipCount = win.targetTrackClipCount || 0;
+          if (qymTargetClipCount > 0) {
+            var qymClipNoun = qymTargetClipCount === 1 ? 'clip' : 'clips';
+            showPreflightError('qym', 'Video track V' + requestedTrack + ' is not empty in the placement range. It already has ' + qymTargetClipCount + ' ' + qymClipNoun + ' there. Pick an empty track or clear V' + requestedTrack + ', then click Run again.');
             return;
           }
         }
@@ -6099,7 +6244,7 @@
           }
         };
 
-        callJsx('qymGetSequenceWindow', {}, function (rawWin) {
+        callJsx('qymGetSequenceWindow', { targetTrack: targetTrack }, function (rawWin) {
           var win = null;
           try { win = JSON.parse(rawWin); } catch (e) { win = null; }
 
@@ -6119,7 +6264,20 @@
           var numV = win.numVideoTracks || 0;
           if (numV > 0 && targetTrack > numV) {
             var missing = targetTrack - numV;
-            setStatus('Cancelled — video track V' + targetTrack + ' doesn\'t exist. The sequence has ' + numV + ' video track' + (numV === 1 ? '' : 's') + '. Add ' + missing + ' more in Premiere (right-click the V' + numV + ' track header → "Add Track…"), then click Run again.');
+            showPreflightError('slides', 'Video track V' + targetTrack + ' doesn\'t exist. The sequence has ' + numV + ' video track' + (numV === 1 ? '' : 's') + '. Add ' + missing + ' more in Premiere (right-click the V' + numV + ' track header → "Add Track…"), then click Run again.');
+            setRunning(false);
+            return;
+          }
+
+          // ── Target-track-empty pre-flight ──────────────────────────────
+          // Don't burn slides on top of existing clips. If the chosen track
+          // already has any clip overlapping the placement range (In/Out if
+          // set, otherwise full sequence), cancel here — before models load,
+          // before frame analysis — and tell the user what to do.
+          var targetClipCount = win.targetTrackClipCount || 0;
+          if (targetClipCount > 0) {
+            var clipNoun = targetClipCount === 1 ? 'clip' : 'clips';
+            showPreflightError('slides', 'Video track V' + targetTrack + ' is not empty in the placement range. It already has ' + targetClipCount + ' ' + clipNoun + ' there. Pick an empty track or clear V' + targetTrack + ', then click Run again.');
             setRunning(false);
             return;
           }
@@ -6213,6 +6371,11 @@
     setUpdateStatus(updateRepo ? 'Ready to check for updates.' : 'No GitHub update source is configured.');
   }
   setUpdateUiState();
+  // Update nag: no-op on boot (latestRelease is still null at this point).
+  // The real auto-pop happens after the live GitHub check returns in
+  // checkForUpdates's callback, which calls evaluateUpdateAlert again with
+  // full release info in hand.
+  evaluateUpdateAlert();
   if (updateRepo) {
     checkForUpdates({ silent: true });
   }

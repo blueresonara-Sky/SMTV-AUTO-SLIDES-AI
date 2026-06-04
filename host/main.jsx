@@ -258,12 +258,27 @@ function _getPlacementWindow(seq, fallbackEndSeconds) {
         if (seq && seq.getInPointAsTime && seq.getOutPointAsTime) {
             var inTime = seq.getInPointAsTime();
             var outTime = seq.getOutPointAsTime();
-            var inSeconds = inTime && typeof inTime.seconds === 'number' ? inTime.seconds : 0;
-            var outSeconds = outTime && typeof outTime.seconds === 'number' ? outTime.seconds : 0;
+            var inSeconds  = inTime  && typeof inTime.seconds  === 'number' ? inTime.seconds  : null;
+            var outSeconds = outTime && typeof outTime.seconds === 'number' ? outTime.seconds : null;
 
-            if (outSeconds > inSeconds) {
-                start = inSeconds;
-                end = outSeconds;
+            // Premiere sequences usually have a Start Timecode of 01:00:00:00.
+            // If the user drops the In point at displayed-TC 00:00:00:00 (one
+            // hour BEFORE the sequence's displayed start), Premiere returns a
+            // garbage / negative seconds value for that In — e.g. ~ -400 000 s.
+            // The Out point that the user expects is real and inside the
+            // sequence. We don't want one bad endpoint to throw the whole
+            // window away, so:
+            //   • clamp each endpoint into [0, usedLen + small slop]
+            //   • only use them if outClamped > inClamped after clamping
+            // This preserves user intent in the common "In at TC 0 / Out inside
+            // the sequence" case (snaps In to sequence start, keeps Out as-is).
+            var hi = fallbackEndSeconds + 0.5;
+            var inClamped  = (inSeconds  !== null) ? Math.max(0, Math.min(hi, inSeconds))  : null;
+            var outClamped = (outSeconds !== null) ? Math.max(0, Math.min(hi, outSeconds)) : null;
+
+            if (inClamped !== null && outClamped !== null && outClamped > inClamped) {
+                start = inClamped;
+                end   = Math.min(fallbackEndSeconds, outClamped);
             }
         }
     } catch (e) {}
@@ -1092,6 +1107,13 @@ function _applyQYMFade(trackItem, fadeDuration, clipDuration) {
 
 // ── qymGetSequenceWindow ────────────────────────────────────────────────────
 // Returns the usable window (in/out points or full sequence length).
+//
+// Optional payload (JSON):
+//   { targetTrack: <1-based track number> }
+// When provided and valid, also returns targetTrackClipCount — the number of
+// clips on that video track whose [start, end] overlaps the placement window.
+// Slides tab uses this for a "track must be empty in placement range"
+// pre-flight. QYM caller passes {} so this is a no-op for QYM.
 function qymGetSequenceWindow(payloadJson) {
     try {
         if (!app.project) return _npmJson({ ok: false, error: 'No open project.' });
@@ -1103,6 +1125,17 @@ function qymGetSequenceWindow(payloadJson) {
         if (usedLen <= 0) usedLen = 1;
 
         var win = _getPlacementWindow(seq, usedLen);
+
+        // ── Parse optional payload ──────────────────────────────────────────
+        var requestedTargetTrack = 0;
+        if (payloadJson) {
+            try {
+                var _payload = JSON.parse(payloadJson);
+                if (_payload && typeof _payload.targetTrack === 'number') {
+                    requestedTargetTrack = _payload.targetTrack | 0;
+                }
+            } catch (_pe) {}
+        }
 
         // Scan V1 only for the two named clips that must never be covered:
         //   • starts with "Slogan"  — the Most Powerful Daily Prayer slogan
@@ -1123,13 +1156,41 @@ function qymGetSequenceWindow(payloadJson) {
             }
         }
 
+        // ── Target-track occupancy scan (Slides pre-flight) ─────────────────
+        // Count clips on the chosen track whose interval overlaps the
+        // placement window. Tiny epsilon avoids counting touching-edges as
+        // overlap (a clip that ends exactly at win.start is not blocking).
+        var targetTrackClipCount = 0;
+        var numV = seq.videoTracks ? seq.videoTracks.numTracks : 0;
+        if (requestedTargetTrack >= 1 && requestedTargetTrack <= numV) {
+            var trackIndex = requestedTargetTrack - 1;
+            var tt = seq.videoTracks[trackIndex];
+            if (tt && tt.clips) {
+                var wStart = win.start;
+                var wEnd   = win.end;
+                var eps = 0.0005; // ~half a millisecond
+                for (var ti = 0; ti < tt.clips.numItems; ti++) {
+                    var tc = tt.clips[ti];
+                    if (!tc) continue;
+                    var tcStart = (tc.start && typeof tc.start.seconds === 'number') ? tc.start.seconds : 0;
+                    var tcEnd   = (tc.end   && typeof tc.end.seconds   === 'number') ? tc.end.seconds   : 0;
+                    if (tcEnd <= tcStart) continue;
+                    // overlap: tc.start < wEnd AND tc.end > wStart (with epsilon)
+                    if (tcStart < (wEnd - eps) && tcEnd > (wStart + eps)) {
+                        targetTrackClipCount++;
+                    }
+                }
+            }
+        }
+
         return _npmJson({
             ok: true,
             windowStart: win.start,
             windowEnd: win.end,
             usedTimelineLengthSeconds: usedLen,
             blockedClipRanges: blockedClipRanges,
-            numVideoTracks: (seq.videoTracks ? seq.videoTracks.numTracks : 0)
+            numVideoTracks: numV,
+            targetTrackClipCount: targetTrackClipCount
         });
     } catch (err) {
         return _npmJson({ ok: false, error: err.toString() });

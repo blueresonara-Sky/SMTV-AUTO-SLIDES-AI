@@ -335,6 +335,61 @@ button.primary:disabled:hover {
   background: #2d2f33;
   border-color: #5a5e66;
 }
+
+/* ── Update-available alert modal ────────────────────────────────────────
+   When the panel auto-pops the "Update available" nag, we tag the backdrop
+   with class `update-alert` (see showUpdateRequiredModal in main.js). These
+   rules ONLY apply to that variant — other modals (install-confirm,
+   capacity warning, no-in/out confirm) keep the compact default styling. */
+.modal-backdrop.update-alert .modal-card {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  border: 2px solid #1f9d55;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 6px rgba(31, 157, 85, 0.18);
+}
+.modal-backdrop.update-alert .modal-title {
+  padding: 22px 26px 20px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #ffffff;
+  background: linear-gradient(135deg, #1f9d55 0%, #168047 100%);
+  border-bottom: 1px solid #115c33;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+}
+.modal-backdrop.update-alert .modal-body {
+  padding: 22px 26px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.modal-backdrop.update-alert .modal-actions {
+  padding: 16px 26px 22px;
+  gap: 14px;
+}
+/* "Update Now" — the primary OK button (no .secondary-btn class). Big,
+   green, attention-grabbing. */
+.modal-backdrop.update-alert .modal-actions button:not(.secondary-btn) {
+  min-width: 180px;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 700;
+  background: #1f9d55;
+  border: 1px solid #168047;
+  color: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(31, 157, 85, 0.35);
+  letter-spacing: 0.2px;
+}
+.modal-backdrop.update-alert .modal-actions button:not(.secondary-btn):hover {
+  background: #25b762;
+  filter: none;
+}
+/* "Later" — keep it modest so it doesn't compete with Update Now. */
+.modal-backdrop.update-alert .modal-actions .secondary-btn {
+  min-width: 92px;
+  padding: 10px 18px;
+  font-size: 14px;
+}
 #status {
   min-height: 170px;
   background: #101010;
@@ -343,4 +398,63 @@ button.primary:disabled:hover {
   border-radius: 4px;
   overflow: auto;
   white-space: pre-wrap;
+}
+
+/* ── Pre-flight cancel: red "ban-sign" state for status boxes ─────────────
+   When the panel cancels a Run because of a pre-flight failure (target
+   track doesn't exist, target track not empty), the status text gets a
+   "⛔ " prefix from JS AND the box paints red so it's visible from across
+   the room. The class is auto-removed the next time setStatus/setQymStatus
+   is called with a normal message. */
+#status.is-error,
+#qymStatus.is-error {
+  background: #2a0e0e;
+  border: 2px solid #d9534f;
+  color: #ffd6d4;
+  font-weight: 700;
+  font-size: 15px;
+  box-shadow: 0 0 0 4px rgba(217, 83, 79, 0.18);
+}
+
+/* Red-variant alert modal (mirrors .update-alert but in red). Used by
+   showPreflightError for blocking pre-flight errors. */
+.modal-backdrop.error-alert .modal-card {
+  width: min(580px, 100%);
+  border: 2px solid #d9534f;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 6px rgba(217, 83, 79, 0.22);
+}
+.modal-backdrop.error-alert .modal-title {
+  padding: 20px 24px 18px;
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  background: linear-gradient(135deg, #d9534f 0%, #a82723 100%);
+  border-bottom: 1px solid #7a1c19;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+}
+.modal-backdrop.error-alert .modal-title::before {
+  content: '⛔ ';
+}
+.modal-backdrop.error-alert .modal-body {
+  padding: 20px 24px;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.modal-backdrop.error-alert .modal-actions {
+  padding: 14px 24px 20px;
+}
+.modal-backdrop.error-alert .modal-actions button {
+  min-width: 110px;
+  padding: 10px 20px;
+  font-size: 15px;
+  font-weight: 700;
+  background: #d9534f;
+  border: 1px solid #a82723;
+  color: #ffffff;
+  border-radius: 6px;
+}
+.modal-backdrop.error-alert .modal-actions button:hover {
+  background: #c9433f;
+  filter: none;
 }
