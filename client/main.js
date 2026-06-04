@@ -687,6 +687,19 @@
     if (!updateState.latestRelease)  return;
     if (updateState.updateAlertShown) return;
 
+    // Suppress the nag if the user has already clicked Update Now and the
+    // Windows deferred installer is staged or pending. They've engaged —
+    // popping the modal again on every panel reload until Premiere actually
+    // restarts would be wrong. We only suppress when the staged version is
+    // ≥ the current latest, so a NEWER release later will still nag.
+    var installStatus = loadUpdateInstallStatus();
+    if (installStatus && (installStatus.state === 'staged' || installStatus.state === 'pending')) {
+      var stagedVer = installStatus.version || '';
+      if (stagedVer && compareVersions(stagedVer, latest) >= 0) {
+        return;
+      }
+    }
+
     updateState.updateAlertShown = true;
     setTimeout(showUpdateRequiredModal, 0);
   }
